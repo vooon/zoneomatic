@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -13,8 +14,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/bwesterb/go-zonefile"
 	"github.com/go-fuego/fuego"
+	"github.com/miekg/dns"
+	"github.com/miekg/dnsfmt/zonefile"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 )
 
@@ -100,23 +102,38 @@ func (s *File) Reload() error {
 		return err
 	}
 
-	zf, err := zonefile.Load(buf)
-	if err != nil {
-		return err
+	zf, parseErr := zonefile.Load(buf)
+	if parseErr != nil {
+		return parseErr
 	}
 
 	ok := false
+	prevDomain := []byte{}
 	for _, ent := range zf.Entries() {
-		if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-			s.origin = string(ent.Values()[0])
-		}
-
-		if !bytes.Equal(ent.Type(), []byte("SOA")) {
+		if ent.IsComment {
 			continue
 		}
 
-		s.soa = &ent
-		ok = true
+		if ent.IsControl {
+			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
+				s.origin = string(zonefile.Fqdn(ent.Values()[0]))
+			}
+			continue
+		}
+
+		dom := ent.Domain()
+		if dom != nil {
+			prevDomain = dom
+		} else {
+			dom = prevDomain
+		}
+
+		ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
+
+		if ent.RRType() == dns.TypeSOA {
+			s.soa = &ent
+			ok = true
+		}
 	}
 	if !ok {
 		return fmt.Errorf("SOA not found")
@@ -127,6 +144,8 @@ func (s *File) Reload() error {
 	}
 	s.stat = st
 	s.zf = zf
+
+	PrintEntries(zf.Entries(), os.Stdout)
 
 	return nil
 }
@@ -157,39 +176,44 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
+	allEnt := s.zf.Entries()
 	entA := make([]*zonefile.Entry, 0, len(newA))
 	entAAAA := make([]*zonefile.Entry, 0, len(newAAAA))
+	newent := make([]byte, 0, 1024)
 
-	for _, ent := range s.zf.Entries() {
+	for _, ent := range allEnt {
 		if !bytes.Equal(ent.Domain(), shortDomain) {
 			continue
 		}
 
-		if bytes.Equal(ent.Type(), []byte("A")) {
+		if ent.RRType() == dns.TypeA {
 			entA = append(entA, &ent)
-		} else if bytes.Equal(ent.Type(), []byte("AAAA")) {
+		} else if ent.RRType() == dns.TypeAAAA {
 			entAAAA = append(entAAAA, &ent)
 		}
 	}
 
 	for i := len(entA); i < len(newA); i++ {
-		// XXX: AddA does not set Type, and it's impossible to change it later
-		// ent := s.zf.AddA(string(shortDomain), newA[i].String())
-
-		ent, err := zonefile.ParseEntry(fmt.Appendf(nil, "%s IN A %v", shortDomain, newA[i]))
-		if err != nil {
-			return err
-		}
-
-		entA = append(entA, s.zf.AddEntry(ent))
+		newent = fmt.Appendf(newent, "%s IN A %v\n", shortDomain, newA[i])
 	}
 	for i := len(entAAAA); i < len(newAAAA); i++ {
-		ent, err := zonefile.ParseEntry(fmt.Appendf(nil, "%s IN AAAA %v", shortDomain, newAAAA[i]))
+		newent = fmt.Appendf(newent, "%s IN AAAA %v\n", shortDomain, newAAAA[i])
+	}
+
+	if len(newent) > 0 {
+		zf2, err := zonefile.Load(newent)
 		if err != nil {
 			return err
 		}
 
-		entAAAA = append(entAAAA, s.zf.AddEntry(ent))
+		for _, ent := range zf2.Entries() {
+			allEnt = append(allEnt, ent)
+			if ent.RRType() == dns.TypeA {
+				entA = append(entA, &ent)
+			} else if ent.RRType() == dns.TypeAAAA {
+				entAAAA = append(entAAAA, &ent)
+			}
+		}
 	}
 
 	for i, ent := range entA {
@@ -214,8 +238,13 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 		}
 	}
 
+	uglyBuf := bytes.NewBuffer(nil)
+	PrintEntries(allEnt, uglyBuf)
+
+	fmt.Println(string(uglyBuf.String()))
+
 	ret := bytes.NewBuffer(nil)
-	err = dnsfmt.Reformat(s.zf.Save(), nil, ret, true)
+	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
 	if err != nil {
 		return err
 	}
@@ -242,4 +271,39 @@ func StripOrigin(name, origin string) string {
 
 	// strip suffix + dot
 	return name[:l1-l2-1]
+}
+
+func PrintEntries(entries []zonefile.Entry, w io.Writer) {
+
+	for _, e := range entries {
+
+		if e.IsComment {
+			for _, c := range e.Comments() {
+				fmt.Fprintf(w, "%s\n", c)
+			}
+			continue
+		} else if e.IsControl {
+			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" ")))
+			continue
+		}
+
+		fmt.Fprintf(w, "%s ", e.Domain())
+		if ttl := e.TTL(); ttl != nil {
+			fmt.Fprintf(w, " %d ", *ttl)
+		}
+		if cls := e.Class(); cls != nil {
+			fmt.Fprintf(w, " %s ", cls)
+		}
+		if typ := e.Type(); typ != nil {
+			fmt.Fprintf(w, " %s ", typ)
+		}
+
+		for _, v := range e.Values() {
+			fmt.Fprintf(w, " %s ", v)
+		}
+
+		fmt.Fprintln(w)
+	}
+
+	return
 }
