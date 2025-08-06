@@ -1,11 +1,18 @@
 package server
 
 import (
+	"errors"
+	"log/slog"
 	"net"
+	"net/netip"
+	"slices"
 
-	openapiv3 "github.com/getkin/kin-openapi/openapi3"
+	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-fuego/fuego"
+	"github.com/go-fuego/fuego/option"
+	"github.com/go-fuego/fuego/param"
 	"github.com/pires/go-proxyproto"
+	"github.com/vooon/zoneomatic/internal/htpasswd"
 )
 
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
@@ -26,9 +33,9 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 	srv := fuego.NewServer(
 		fuego.WithListener(listener),
 		fuego.WithSecurity(
-			map[string]*openapiv3.SecuritySchemeRef{
+			map[string]*openapi3.SecuritySchemeRef{
 				"basicAuth": {
-					Value: openapiv3.NewSecurityScheme().
+					Value: openapi3.NewSecurityScheme().
 						WithType("http").
 						WithScheme("basic"),
 				},
@@ -37,4 +44,77 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 	)
 
 	return srv, listener, nil
+}
+
+func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd) {
+
+	authMw := htpasswd.NewBasicAuthMiddleware(htp)
+
+	fuego.Get(srv, "/myip",
+		func(ctx fuego.ContextNoBody) (string, error) {
+			a, err := netip.ParseAddrPort(ctx.Request().RemoteAddr)
+			if err != nil {
+				return "", err
+			}
+
+			return a.Addr().String() + "\n", nil
+		},
+		option.Summary("myip"),
+		option.Description("Return client's connection IP address"),
+	)
+
+	fuego.Get(srv, "/nic/update",
+		func(ctx fuego.ContextNoBody) (string, error) {
+
+			lg := slog.Default()
+
+			hns := ctx.QueryParamArr("hostname")
+			myip := ctx.QueryParamArr("myip")
+			myipv6 := ctx.QueryParamArr("myipv6")
+
+			if len(hns) > 1 {
+				lg.WarnContext(ctx, "Update more than one hostname not supported", "hostnames", hns)
+			}
+			domain := hns[0]
+
+			var err error
+			newAddrs := make([]netip.Addr, 0)
+			for _, ip := range slices.Concat(myip, myipv6) {
+				a, err2 := netip.ParseAddr(ip)
+				if err2 != nil {
+					err = errors.Join(err, err2)
+					continue
+				}
+
+				newAddrs = append(newAddrs, a)
+			}
+			if err != nil {
+				lg.ErrorContext(ctx, "Failed to parse myip", "error", err)
+				return "", err
+			}
+
+			if len(newAddrs) == 0 {
+				a, err := netip.ParseAddrPort(ctx.Request().RemoteAddr)
+				if err != nil {
+					return "", err
+				}
+
+				newAddrs = append(newAddrs, a.Addr())
+			}
+
+			_ = domain
+
+			return "", nil
+		},
+		option.Summary("update ddns"),
+		option.Description("Update DDNS record"),
+		option.Middleware(authMw),
+		option.Security(openapi3.SecurityRequirement{
+			"basicAuth": []string{},
+		}),
+		option.Query("hostname", "record domain to update", param.Required()),
+		option.Query("myip", "IP address to set"),
+		option.Query("myipv6", "IPv6 address to set"),
+		option.QueryBool("offline", "Not supported, a no-op for compatibility."),
+	)
 }

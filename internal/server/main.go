@@ -53,6 +53,8 @@ func Main() {
 
 	defer listener.Close() // nolint:errcheck
 
+	RegisterEndpoints(srv, htp)
+
 	go func() {
 		err := srv.Run()
 		if err != nil {
