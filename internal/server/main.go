@@ -5,9 +5,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
+	"github.com/vooon/zoneomatic/internal/htpasswd"
 )
 
 type Cli struct {
@@ -38,9 +40,27 @@ func Main() {
 
 	slog.SetDefault(lg)
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	_ = kctx
-	_ = ctx
+	htp, err := htpasswd.NewFromFile(cli.HTPasswdFile)
+	kctx.FatalIfErrorf(err)
+
+	_ = htp
+
+	srv, listener, err := NewServer(&cli)
+	kctx.FatalIfErrorf(err)
+
+	defer listener.Close() // nolint:errcheck
+
+	go func() {
+		err := srv.Run()
+		if err != nil {
+			slog.Error("Server run failed", "error", err)
+		}
+	}()
+
+	// serve until sigint/sigterm
+	<-ctx.Done()
+	srv.Shutdown(context.Background()) // nolint:errcheck
 }
