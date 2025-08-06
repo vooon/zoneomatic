@@ -1,4 +1,4 @@
-package main
+package dnsfmt
 
 import (
 	"bytes"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestFormat(t *testing.T) {
-	*flagInc = false
+	// *flagInc = false
 	const mess = `$TTL    6H
 $ORIGIN example.org.
 @       IN      SOA     ns miek.miek.nl. 1282630067  4H 1H 7D 7200
@@ -14,7 +14,7 @@ $ORIGIN example.org.
 example.org.		IN	NS  ns.example.org.
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out)
+	Reformat([]byte(mess), nil, out, false)
 	if out.String() != `$TTL 6H
 $ORIGIN example.org.
 @               IN   SOA        ns miek.miek.nl. (
@@ -36,7 +36,7 @@ func TestFormatCommentStart(t *testing.T) {
 $ORIGIN example.nl.
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out)
+	Reformat([]byte(mess), nil, out, false)
 	if out.String() != `; example.nl,v 1.00 2015/03/19 14:31:47 root Exp
 $ORIGIN example.nl.
 ` {
@@ -45,7 +45,7 @@ $ORIGIN example.nl.
 }
 
 func TestFormatKeepTogether(t *testing.T) {
-	*flagInc = false
+	// *flagInc = false
 	const mess = `$ORIGIN miek.nl.
 @       IN      SOA     linode.miek.nl. miek.miek.nl. (
 			     1282630063 ; Serial
@@ -73,7 +73,7 @@ x               IN      CNAME   a
 nlgids          IN      CNAME   a
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out)
+	Reformat([]byte(mess), nil, out, false)
 	if out.String() != `$ORIGIN miek.nl.
 @                    IN   SOA        linode miek (
                                         1282630063   ; serial  Tue, 24 Aug 2010 06:07:43 UTC

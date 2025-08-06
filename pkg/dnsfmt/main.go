@@ -1,43 +1,16 @@
-package main
+package dnsfmt
 
 import (
 	"bytes"
-	"flag"
 	"fmt"
 	"io"
 	"log"
-	"os"
 
 	"github.com/miekg/dns"
 	"github.com/miekg/dnsfmt/zonefile"
 )
 
-var (
-	flagOrigin = flag.String("o", "", "set the origin, otherwise taken from $ORIGIN or the owner name of the SOA record.")
-	flagInc    = flag.Bool("i", true, "increase the serial")
-)
-
-func main() {
-	flag.Parse()
-	if flag.NArg() == 0 {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			log.Fatalf("dnsfmt: %s", err)
-		}
-		Reformat(data, []byte(*flagOrigin), os.Stdout)
-		return
-	}
-
-	for _, a := range flag.Args() {
-		data, err := os.ReadFile(a)
-		if err != nil {
-			log.Fatalf("dnsfmt: %s", err)
-		}
-		Reformat(data, []byte(*flagOrigin), os.Stdout)
-	}
-}
-
-func Reformat(data, origin []byte, w io.Writer) error {
+func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 	origin = zonefile.Fqdn(origin)
 
 	zf, perr := zonefile.Load(data)
@@ -218,7 +191,7 @@ func Reformat(data, origin []byte, w io.Writer) error {
 			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:2], []byte(" ")))
 			for i, v := range values[2:] {
 				if i == 0 {
-					if *flagInc {
+					if incrementSerial {
 						v = Increase(v)
 					}
 					humandate := SerialToHuman(v)
