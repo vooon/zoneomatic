@@ -145,7 +145,7 @@ func (s *File) Reload() error {
 	s.stat = st
 	s.zf = zf
 
-	PrintEntries(zf.Entries(), os.Stdout)
+	// PrintEntries(zf.Entries(), os.Stdout)
 
 	return nil
 }
@@ -241,7 +241,7 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(allEnt, uglyBuf)
 
-	fmt.Println(string(uglyBuf.String()))
+	// fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
