@@ -13,6 +13,7 @@ import (
 	"github.com/go-fuego/fuego/param"
 	"github.com/pires/go-proxyproto"
 	"github.com/vooon/zoneomatic/internal/htpasswd"
+	"github.com/vooon/zoneomatic/internal/zone"
 )
 
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
@@ -46,7 +47,7 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 	return srv, listener, nil
 }
 
-func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd) {
+func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Controller) {
 
 	authMw := htpasswd.NewBasicAuthMiddleware(htp)
 
@@ -102,9 +103,12 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd) {
 				newAddrs = append(newAddrs, a.Addr())
 			}
 
-			_ = domain
+			err = zctl.UpdateDomain(ctx, domain, newAddrs)
+			if err != nil {
+				return "", err
+			}
 
-			return "", nil
+			return "OK", nil
 		},
 		option.Summary("update ddns"),
 		option.Description("Update DDNS record"),

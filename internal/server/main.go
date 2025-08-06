@@ -10,6 +10,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/vooon/zoneomatic/internal/htpasswd"
+	"github.com/vooon/zoneomatic/internal/zone"
 )
 
 type Cli struct {
@@ -43,17 +44,18 @@ func Main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	htp, err := htpasswd.NewFromFile(cli.HTPasswdFile)
+	zctl, err := zone.New(cli.ZoneFiles...)
 	kctx.FatalIfErrorf(err)
 
-	_ = htp
+	htp, err := htpasswd.NewFromFile(cli.HTPasswdFile)
+	kctx.FatalIfErrorf(err)
 
 	srv, listener, err := NewServer(&cli)
 	kctx.FatalIfErrorf(err)
 
 	defer listener.Close() // nolint:errcheck
 
-	RegisterEndpoints(srv, htp)
+	RegisterEndpoints(srv, htp, zctl)
 
 	go func() {
 		err := srv.Run()

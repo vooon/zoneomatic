@@ -1,0 +1,17 @@
+$ORIGIN at.example.com.
+$TTL 60
+; SOA Record
+@                  IN   SOA        ns1.example.com. hostmaster.example.com. (
+                                      1754484261   ; serial  Wed, 06 Aug 2025 12:44:21 UTC
+                                      1H           ; refresh
+                                      600          ; retry
+                                      1W           ; expire
+                                      1D           ; minimum
+                                      )
+
+; NS Records
+@                  IN   NS         ns1.example.com.
+                   IN   NS         ns2.example.com.
+
+; Existing record
+loop               IN   A          127.0.0.1
