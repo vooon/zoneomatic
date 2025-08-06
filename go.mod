@@ -4,12 +4,13 @@ go 1.24.4
 
 require (
 	github.com/alecthomas/kong v1.12.1
-	github.com/bwesterb/go-zonefile v1.0.1
 	github.com/getkin/kin-openapi v0.132.0
 	github.com/go-fuego/fuego v0.18.8
+	github.com/miekg/dns v1.1.68
+	github.com/miekg/dnsfmt v0.8.0
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.10.0
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-00010101000000-000000000000
+	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20250806151254-a2584ce277c9
 	golang.org/x/crypto v0.40.0
 )
 
@@ -29,8 +30,6 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mailru/easyjson v0.9.0 // indirect
-	github.com/miekg/dns v1.1.68 // indirect
-	github.com/miekg/dnsfmt v0.8.0 // indirect
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
