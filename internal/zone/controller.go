@@ -5,12 +5,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/netip"
 	"os"
 	"path"
+	"slices"
+	"strings"
 	"sync"
 
-	"github.com/miekg/dnsfmt/zonefile"
+	"github.com/bwesterb/go-zonefile"
+	"github.com/go-fuego/fuego"
 )
 
 type Controller interface {
@@ -52,7 +56,28 @@ func New(zonefiles ...string) (Controller, error) {
 }
 
 func (s *DomainCtrl) UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error {
-	return nil
+
+	lg := slog.Default().With("domain", domain)
+
+	domainDot := domain
+	if !strings.HasSuffix(domainDot, ".") {
+		domainDot += "."
+	}
+
+	for _, fl := range s.files {
+		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
+		if strings.HasSuffix(domainDot, fl.origin) {
+			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+			return fl.UpdateDomain(ctx, domainDot, addrs)
+		}
+
+	}
+
+	return &fuego.HTTPError{
+		Title:  "zone not found",
+		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
+		Status: http.StatusNotFound,
+	}
 }
 
 func (s *File) Reload() error {
@@ -66,6 +91,7 @@ func (s *File) Reload() error {
 
 	if s.stat == st {
 		// nothing to do
+		s.lg.Debug("File not changed")
 		return nil
 	}
 
@@ -81,6 +107,10 @@ func (s *File) Reload() error {
 
 	ok := false
 	for _, ent := range zf.Entries() {
+		if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
+			s.origin = string(ent.Values()[0])
+		}
+
 		if !bytes.Equal(ent.Type(), []byte("SOA")) {
 			continue
 		}
@@ -92,9 +122,114 @@ func (s *File) Reload() error {
 		return fmt.Errorf("SOA not found")
 	}
 
-	s.origin = string(s.soa.Domain())
+	if s.origin == "" {
+		s.origin = string(s.soa.Domain())
+	}
 	s.stat = st
 	s.zf = zf
 
 	return nil
+}
+
+func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error {
+
+	err := s.Reload()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	slices.SortFunc(addrs, func(a, b netip.Addr) int {
+		return a.Compare(b)
+	})
+
+	newA := make([]netip.Addr, 0, len(addrs))
+	newAAAA := make([]netip.Addr, 0, len(addrs))
+	for _, a := range addrs {
+		if a.Is4() {
+			newA = append(newA, a)
+			continue
+		}
+		newAAAA = append(newAAAA, a)
+	}
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+
+	entA := make([]*zonefile.Entry, 0, len(newA))
+	entAAAA := make([]*zonefile.Entry, 0, len(newAAAA))
+
+	for _, ent := range s.zf.Entries() {
+		if !bytes.Equal(ent.Domain(), shortDomain) {
+			continue
+		}
+
+		if bytes.Equal(ent.Type(), []byte("A")) {
+			entA = append(entA, &ent)
+		} else if bytes.Equal(ent.Type(), []byte("AAAA")) {
+			entAAAA = append(entAAAA, &ent)
+		}
+	}
+
+	for i := len(entA); i < len(newA); i++ {
+		// XXX: AddA does not set Type, and it's impossible to change it later
+		// ent := s.zf.AddA(string(shortDomain), newA[i].String())
+
+		ent, err := zonefile.ParseEntry(fmt.Appendf(nil, "%s IN A %v", shortDomain, newA[i]))
+		if err != nil {
+			return err
+		}
+
+		entA = append(entA, s.zf.AddEntry(ent))
+	}
+	for i := len(entAAAA); i < len(newAAAA); i++ {
+		ent, err := zonefile.ParseEntry(fmt.Appendf(nil, "%s IN AAAA %v", shortDomain, newAAAA[i]))
+		if err != nil {
+			return err
+		}
+
+		entAAAA = append(entAAAA, s.zf.AddEntry(ent))
+	}
+
+	for i, ent := range entA {
+		if i < len(newA) {
+			ent.SetValue(0, []byte(newA[i].String()))
+			continue
+		}
+
+		if len(newA) != 0 {
+			ent.SetValue(0, []byte(newA[0].String()))
+		}
+	}
+
+	for i, ent := range entAAAA {
+		if i < len(newAAAA) {
+			ent.SetValue(0, []byte(newAAAA[i].String()))
+			continue
+		}
+
+		if len(newAAAA) != 0 {
+			ent.SetValue(0, []byte(newAAAA[0].String()))
+		}
+	}
+
+	fmt.Println(string(s.zf.Save()))
+
+	return nil
+}
+
+func StripOrigin(name, origin string) string {
+	if !strings.HasSuffix(name, origin) {
+		return name
+	}
+
+	l1 := len(name)
+	l2 := len(origin)
+	if l1 == l2 {
+		return "@"
+	}
+
+	// strip suffix + dot
+	return name[:l1-l2-1]
 }
