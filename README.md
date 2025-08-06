@@ -16,8 +16,10 @@ GET /myip
 Return client's IP Address in plain text.
 
 
-POST /nic/update
-----------------
+GET /nic/update
+---------------
+
+Update A/AAAA records.
 
 Query parameters:
 
