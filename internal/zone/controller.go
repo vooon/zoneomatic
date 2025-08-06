@@ -15,6 +15,7 @@ import (
 
 	"github.com/bwesterb/go-zonefile"
 	"github.com/go-fuego/fuego"
+	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 )
 
 type Controller interface {
@@ -213,7 +214,17 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 		}
 	}
 
-	fmt.Println(string(s.zf.Save()))
+	ret := bytes.NewBuffer(nil)
+	err = dnsfmt.Reformat(s.zf.Save(), nil, ret, true)
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	if err != nil {
+		s.lg.ErrorContext(ctx, "Failed to save file", "error", err)
+		return err
+	}
 
 	return nil
 }
