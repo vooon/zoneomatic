@@ -70,7 +70,6 @@ func (s *DomainCtrl) UpdateDomain(ctx context.Context, domain string, addrs []ne
 			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
 			return fl.UpdateDomain(ctx, domainDot, addrs)
 		}
-
 	}
 
 	return &fuego.HTTPError{
