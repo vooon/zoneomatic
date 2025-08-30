@@ -10,6 +10,29 @@ This project aiming to provide DDNS API similar to *no-ip.com*,
 so existing `ddns-scripts` can interact with it.
 
 
+Command line options
+--------------------
+
+```
+Usage: zoneomatic --htpasswd=FILE --zone=FILE,... [flags]
+
+DNS Zone file updater
+
+Flags:
+  -h, --help                        Show context-sensitive help.
+      --listen="localhost:9999"     Server listen address ($ZM_LISTEN)
+      --accept-proxy                Accept PROXY protocol ($ZM_ACCEPT_PROXY)
+      --proxy-header-timeout=10s    Timeout for PROXY headers ($ZM_PROXY_HEADER_TIMEOUT)
+  -p, --htpasswd=FILE               Passwords file (bcrypt only) ($ZM_HTPASSWD)
+  -z, --zone=FILE,...               Zone files to update ($ZM_ZONE)
+      --debug                       Enable debug logging ($ZM_DEBUG)
+```
+
+> [!NOTE]
+> API description also available in OpenAPI 3 format on `/swagger`,
+> e.g. http://localhost:9999/swagger
+
+
 GET /myip
 ---------
 
