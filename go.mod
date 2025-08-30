@@ -10,7 +10,7 @@ require (
 	github.com/miekg/dnsfmt v0.8.0
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20250827124815-721dc6ca0e1c
+	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20250827125559-115513463be9
 	golang.org/x/crypto v0.41.0
 )
 

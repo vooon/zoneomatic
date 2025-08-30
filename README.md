@@ -34,3 +34,35 @@ See also: https://www.noip.com/integrate/request
 
 > [!NOTE]
 > If no `myip` nor `myipv6` provided, a client IP would be used.
+
+
+POST /acme/update
+-----------------
+
+Update ACME DNS TXT records.
+
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| X-Api-User | Yes* | Username from the htpasswd file |
+| X-Api-Key | Yes* | Password from the htpasswd file |
+| Authorization | Yes* | HTTP Basic Auth, alternative to pair above |
+
+JSON Object fields:
+
+| Name | Req | Description | Example |
+|------|-----|-------------|---------|
+| subdomain | Yes | Record name without `_acme-challenge.`, *not a UUID* | `foo.example.com` |
+| txt | Yes | Validation token content for the TXT record | `SomeRandomToken` |
+
+See also: https://github.com/joohoi/acme-dns
+
+> [!NOTE]
+> Original ACME-DNS suppose to register custom API key for each record, then use CNAME alias.
+> So in general more secure approach.
+
+> [!NOTE]
+> For `acme.sh` option `ACMEDNS_BASE_URL` should be like that: `https://nsapi.example.com/acme`,
+> `ACMEDNS_USERNAME` & `ACMEDNS_PASSWORD` - valid user in htpasswd file,
+> `ACMEDNS_SUBDOMAIN` - base domain name for which you requesting certificate.
