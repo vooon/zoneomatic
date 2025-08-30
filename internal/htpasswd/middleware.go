@@ -11,6 +11,12 @@ func NewBasicAuthMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
 			user, password, ok := r.BasicAuth()
+			if !ok {
+				// Fallback to DNS-API headers
+				user = r.Header.Get("X-Api-User")
+				password = r.Header.Get("X-Api-Key")
+				ok = len(user) > 0 && len(password) > 0
+			}
 			if ok {
 				ok, _ = ht.Authenticate(user, password)
 			}

@@ -66,3 +66,9 @@ See also: https://github.com/joohoi/acme-dns
 > For `acme.sh` option `ACMEDNS_BASE_URL` should be like that: `https://nsapi.example.com/acme`,
 > `ACMEDNS_USERNAME` & `ACMEDNS_PASSWORD` - valid user in htpasswd file,
 > `ACMEDNS_SUBDOMAIN` - base domain name for which you requesting certificate.
+
+
+GET /health
+-----------
+
+Health check endpoint.

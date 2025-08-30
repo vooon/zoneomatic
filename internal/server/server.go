@@ -16,6 +16,15 @@ import (
 	"github.com/vooon/zoneomatic/internal/zone"
 )
 
+type ACMEUpdateRequest struct {
+	Subdomain string `json:"subdomain" validate:"required"`
+	TXT       string `json:"txt" validate:"required"`
+}
+
+type ACMEUpdateResponse struct {
+	TXT string `json:"txt"`
+}
+
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	listener, err := net.Listen("tcp", cli.Listen)
@@ -40,6 +49,20 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 						WithType("http").
 						WithScheme("basic"),
 				},
+				"apiUserAuth": {
+					Value: openapi3.NewSecurityScheme().
+						WithType("apiKey").
+						WithIn("header").
+						WithName("X-Api-User").
+						WithDescription("username"),
+				},
+				"apiKeyAuth": {
+					Value: openapi3.NewSecurityScheme().
+						WithType("apiKey").
+						WithIn("header").
+						WithName("X-Api-Key").
+						WithDescription("password"),
+				},
 			},
 		),
 	)
@@ -50,6 +73,14 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Controller) {
 
 	authMw := htpasswd.NewBasicAuthMiddleware(htp)
+
+	fuego.Get(srv, "/health",
+		func(ctx fuego.ContextNoBody) (string, error) {
+			return "OK", nil
+		},
+		option.Summary("health"),
+		option.Description("Health check endpoint"),
+	)
 
 	fuego.Get(srv, "/myip",
 		func(ctx fuego.ContextNoBody) (string, error) {
@@ -120,5 +151,37 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		option.Query("myip", "IP address to set"),
 		option.Query("myipv6", "IPv6 address to set"),
 		option.QueryBool("offline", "Not supported, a no-op for compatibility."),
+	)
+
+	fuego.Post(srv, "/acme/update",
+		func(ctx fuego.ContextWithBody[ACMEUpdateRequest]) (*ACMEUpdateResponse, error) {
+
+			lg := slog.Default()
+
+			req, err := ctx.Body()
+			if err != nil {
+				lg.ErrorContext(ctx, "Failed to parse body", "error", err)
+				return nil, err
+			}
+
+			err = zctl.UpdateACMEChallenge(ctx, req.Subdomain, req.TXT)
+			if err != nil {
+				return nil, err
+			}
+
+			return &ACMEUpdateResponse{TXT: req.TXT}, nil
+		},
+		option.Summary("update acme"),
+		option.Description("Update ACME challenge TXT record"),
+		option.Middleware(authMw),
+		option.Security(
+			openapi3.SecurityRequirement{
+				"apiUserAuth": []string{},
+				"apiKeyAuth":  []string{},
+			},
+			openapi3.SecurityRequirement{
+				"basicAuth": []string{},
+			},
+		),
 	)
 }
