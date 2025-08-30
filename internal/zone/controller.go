@@ -22,13 +22,14 @@ import (
 
 type Controller interface {
 	UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error
+	UpdateACMEChallenge(ctx context.Context, domain string, token string) error
 }
 
 type File struct {
 	origin string
 	path   string
 	stat   os.FileInfo
-	zf     *zonefile.Zonefile
+	zf     *zonefile.Zonefile // XXX REMOVE: was a bad idea. Anyway i reload it each time.
 	soa    *zonefile.Entry
 	lg     *slog.Logger
 	mu     sync.Mutex
@@ -72,6 +73,34 @@ func (s *DomainCtrl) UpdateDomain(ctx context.Context, domain string, addrs []ne
 		if strings.HasSuffix(domainDot, fl.origin) {
 			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
 			return fl.UpdateDomain(ctx, domainDot, addrs)
+		}
+	}
+
+	return &fuego.HTTPError{
+		Title:  "zone not found",
+		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
+		Status: http.StatusNotFound,
+	}
+}
+
+func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
+
+	lg := slog.Default().With("domain", domain)
+
+	domainDot := domain
+	if !strings.HasSuffix(domainDot, ".") {
+		domainDot += "."
+	}
+
+	if !strings.HasPrefix(domainDot, "_acme-challenge.") {
+		domainDot = "_acme-challenge." + domainDot
+	}
+
+	for _, fl := range s.files {
+		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
+		if strings.HasSuffix(domainDot, fl.origin) {
+			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+			return fl.UpdateACMEChallenge(ctx, domainDot, token)
 		}
 	}
 
@@ -258,6 +287,74 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 	return nil
 }
 
+func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
+
+	err := s.Reload()
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+
+	allEnt := s.zf.Entries()
+	entTXT := make([]*zonefile.Entry, 0, 1)
+	newent := make([]byte, 0, 1024)
+
+	for _, ent := range allEnt {
+		if !bytes.Equal(ent.Domain(), shortDomain) {
+			continue
+		}
+
+		if ent.RRType() == dns.TypeTXT {
+			entTXT = append(entTXT, &ent)
+		}
+	}
+
+	if len(entTXT) < 1 {
+		newent = fmt.Appendf(newent, "%s IN TXT \"%v\"\n", shortDomain, token)
+	}
+
+	if len(newent) > 0 {
+		zf2, err := zonefile.Load(newent)
+		if err != nil {
+			return err
+		}
+
+		for _, ent := range zf2.Entries() {
+			allEnt = append(allEnt, ent)
+			if ent.RRType() == dns.TypeTXT {
+				entTXT = append(entTXT, &ent)
+			}
+		}
+	}
+
+	for _, ent := range entTXT {
+		ent.SetValue(0, []byte(token))
+	}
+
+	uglyBuf := bytes.NewBuffer(nil)
+	PrintEntries(allEnt, uglyBuf)
+
+	// fmt.Println(string(uglyBuf.String()))
+
+	ret := bytes.NewBuffer(nil)
+	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
+	if err != nil {
+		return err
+	}
+
+	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	if err != nil {
+		s.lg.ErrorContext(ctx, "Failed to save file", "error", err)
+		return err
+	}
+
+	return nil
+}
+
 func StripOrigin(name, origin string) string {
 	if !strings.HasSuffix(name, origin) {
 		return name
@@ -274,7 +371,6 @@ func StripOrigin(name, origin string) string {
 }
 
 func PrintEntries(entries []zonefile.Entry, w io.Writer) {
-
 	for _, e := range entries {
 
 		if e.IsComment {
@@ -302,8 +398,6 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 			fmt.Fprintf(w, " %s ", v)
 		}
 
-		fmt.Fprintln(w)
+		fmt.Fprintln(w) // nolint:errcheck
 	}
-
-	return
 }
