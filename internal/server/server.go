@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/netip"
 	"slices"
 
@@ -153,23 +154,27 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		option.QueryBool("offline", "Not supported, a no-op for compatibility."),
 	)
 
-	fuego.Post(srv, "/acme/update",
-		func(ctx fuego.ContextWithBody[ACMEUpdateRequest]) (*ACMEUpdateResponse, error) {
+	fuego.PostStd(srv, "/acme/update",
+		func(w http.ResponseWriter, r *http.Request) {
 
+			ctx := r.Context()
 			lg := slog.Default()
+			defer r.Body.Close() // nolint: errcheck
 
-			req, err := ctx.Body()
+			req, err := fuego.ReadJSON[ACMEUpdateRequest](ctx, r.Body)
 			if err != nil {
 				lg.ErrorContext(ctx, "Failed to parse body", "error", err)
-				return nil, err
+				fuego.SendError(w, r, err)
+				return
 			}
 
 			err = zctl.UpdateACMEChallenge(ctx, req.Subdomain, req.TXT)
 			if err != nil {
-				return nil, err
+				fuego.SendError(w, r, err)
+				return
 			}
 
-			return &ACMEUpdateResponse{TXT: req.TXT}, nil
+			fuego.SendJSON(w, r, &ACMEUpdateResponse{TXT: req.TXT}) // nolint: errcheck
 		},
 		option.Summary("update acme"),
 		option.Description("Update ACME challenge TXT record"),
@@ -181,6 +186,17 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			},
 			openapi3.SecurityRequirement{
 				"basicAuth": []string{},
+			},
+		),
+		option.RequestBody(
+			fuego.RequestBody{
+				Type:         new(ACMEUpdateRequest),
+				ContentTypes: []string{"application/json"},
+			},
+		),
+		option.AddResponse(http.StatusOK, "Record updated",
+			fuego.Response{
+				Type: new(ACMEUpdateResponse),
 			},
 		),
 	)
