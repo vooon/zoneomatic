@@ -11,7 +11,7 @@ require (
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
 	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20250929081126-12eee6bcfa44
-	golang.org/x/crypto v0.44.0
+	golang.org/x/crypto v0.45.0
 )
 
 replace github.com/vooon/zoneomatic/pkg/dnsfmt => ./pkg/dnsfmt
