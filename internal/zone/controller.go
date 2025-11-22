@@ -3,6 +3,7 @@ package zone
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,8 @@ import (
 	"github.com/miekg/dnsfmt/zonefile"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 )
+
+var ErrSoaNotFound = errors.New("SOA not found")
 
 type Controller interface {
 	UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error
@@ -154,7 +157,7 @@ func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 		}
 	}
 	if !ok {
-		return nil, nil, fmt.Errorf("SOA not found")
+		return nil, nil, ErrSoaNotFound
 	}
 
 	if origin == "" {
@@ -168,7 +171,7 @@ func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	}
 	s.origin = origin
 
-	PrintEntries(zf.Entries(), os.Stdout)
+	// PrintEntries(zf.Entries(), os.Stdout)
 
 	return
 }
@@ -252,19 +255,19 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 	for i, ent := range entAAAA {
 		if i < len(newAAAA) {
-			ent.SetValue(0, []byte(newAAAA[i].String()))
+			_ = ent.SetValue(0, []byte(newAAAA[i].String()))
 			continue
 		}
 
 		if len(newAAAA) != 0 {
-			ent.SetValue(0, []byte(newAAAA[0].String()))
+			_ = ent.SetValue(0, []byte(newAAAA[0].String()))
 		}
 	}
 
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(allEnt, uglyBuf)
 
-	// fmt.Println(string(uglyBuf.String()))
+	fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)

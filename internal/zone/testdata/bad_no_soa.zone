@@ -1,0 +1,4 @@
+$ORIGIN at.example.com.
+$TTL 60
+
+;; No SOA - which is mandatory
