@@ -1,0 +1,110 @@
+$ORIGIN mx.example.com
+$TTL 60
+; SOA Record
+@                                IN   SOA        ns1.example.com. hostmaster.example.com. (
+                                                    1763822926   ; serial  Sun, 29 Oct 1769 06:04:00 UTC
+                                                    1H           ; refresh
+                                                    600          ; retry
+                                                    1W           ; expire
+                                                    1D           ; minimum
+                                                    )
+
+; NS Records
+@                                IN   NS         ns1.example.com.
+                                 IN   NS         ns2.example.com.
+
+;; Mox generated sample
+;; https://www.xmox.nl/
+; Time To Live of 5 minutes, may be recognized if importing as a zone file.
+; Once your setup is working, you may want to increase the TTL.
+$TTL 300
+
+; DANE: These records indicate that a remote mail server trying to deliver email
+; with SMTP (TCP port 25) must verify the TLS certificate with DANE-EE (3), based
+; on the certificate public key ("SPKI", 1) that is SHA2-256-hashed (1) to the
+; hexadecimal hash. DANE-EE verification means only the certificate or public
+; key is verified, not whether the certificate is signed by a (centralized)
+; certificate authority (CA), is expired, or matches the host name.
+;
+; NOTE: Create the records below only once: They are for the machine, and apply
+; to all hosted domains.
+;
+; WARNING: Domain does not appear to be DNSSEC-signed. To enable DANE, first
+; enable DNSSEC on your domain, then add the TLSA records. Records below have been
+; commented out.
+_25._tcp                         IN   TLSA       3 1 1 (
+                                                    bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c696591
+                                                    4f57d5059    
+                                                    )
+                                 IN   TLSA       3 1 1 (
+                                                    208deb23844432a6c35edfab4589304e652c79f0cddce504f963440
+                                                    6b93ecdba    
+                                                    )
+
+; Deliver email for the domain to this host.
+@                                IN   MX         10 @
+
+; Outgoing messages will be signed with the first two DKIM keys. The other two
+; configured for backup, switching to them is just a config change.
+; NOTE: The following is a single long record split over several lines for use
+; in zone files. When adding through a DNS operator web interface, combine the
+; strings into a single string, without ().
+2025a._domainkey                 IN   TXT        "v=DKIM1;h=sha256;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApQmqFYFeRuc+V24tKSBZndL6gmp5IlTYQf95P" "r7vMu9AVRj9xkXcaOxa8P/W8rBSTpYO5i2VPiCPYCgkfKZJ2QUHJvUUoCl1w5oK8EFl7tLheHq77xXdncJuXFptLi1n6rVWeqOW6" "FC/pUf+4rnTVl/c91s6KupHoiJR/MRTdiKMPI2MDvuIFeD7XyMKAOO1xYwfoNQucyu61kRu8Mmv/t+WIK2R4Gaf7h9mFwP1uO0Ee" "t2xIBlQ4G1dDAyjbU/pVp2tADfAdHz3K9YYpmQBL2ONYm9QPkmXcXIrqfY+6hb3adREoBK49btnEyjFiCnpIPUlKoLlR1i4wIZr9" "ad2BwIDAQAB"
+
+; NOTE: The following is a single long record split over several lines for use
+; in zone files. When adding through a DNS operator web interface, combine the
+; strings into a single string, without ().
+2025b._domainkey                 IN   TXT        "v=DKIM1;h=sha256;p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwvlYrpSLTCrDEbE4LR7jmwhGumOPz+T8RsE6A" "5dqpyVIbipCy3kITG5MRx2ZmAsYTWvGBrsPhD9QB85pQCxnlnpdQFjAgpaX7SKe0aRuTQjODwd5LVAb6A5XJRMI6a7WfQsfOTZ4a" "SVxa1MHRVKt5JZemHi6BJNsfasbNEfvhIbRdgJ7VZs1DlQwXUnNThw6FoCPzSx8VehFi0kx8384y+7zPmt1gXEzj4kWGOVo+NyZ7" "Yywqc+OfVhkCddlH8CkC2pGYEpK3njYZml09MwkFOyRGWx8zIv854SZfpV1JUiy5a1nQfHwYT1129PIxIIh8mI/o/KIeEWTGoKpf" "c45wwIDAQAB"
+
+; Specify the MX host is allowed to send for our domain and for itself (for DSNs).
+; ~all means softfail for anything else, which is done instead of -all to prevent older
+; mail servers from rejecting the message because they never get to looking for a dkim/dmarc pass.
+@                                IN   TXT        "v=spf1 ip4:192.168.0.32 ip6:fddc:36cd:7f58::23c mx ~all"
+
+; Emails that fail the DMARC check (without aligned DKIM and without aligned SPF)
+; should be rejected, and request reports. If you email through mailing lists that
+; strip DKIM-Signature headers and don't rewrite the From header, you may want to
+; set the policy to p=none.
+_dmarc                           IN   TXT        "v=DMARC1;p=reject;rua=mailto:dmarcreports@mx.example.com!10m"
+
+; Remote servers can use MTA-STS to verify our TLS certificate with the
+; WebPKI pool of CA's (certificate authorities) when delivering over SMTP with
+; STARTTLSTLS.
+mta-sts                          IN   CNAME      @
+
+_mta-sts                         IN   TXT        "v=STSv1; id=20251122T122520"
+
+; Request reporting about TLS failures.
+_smtp._tls                       IN   TXT        "v=TLSRPTv1; rua=mailto:tlsreports@mx.example.com"
+
+; Client settings will reference a subdomain of the hosted domain, making it
+; easier to migrate to a different server in the future by not requiring settings
+; in all clients to be updated.
+mail                             IN   CNAME      @
+
+; Autoconfig is used by Thunderbird. Autodiscover is (in theory) used by Microsoft.
+autoconfig                       IN   CNAME      @
+
+_autodiscover._tcp               IN   SRV        0 1 443 @
+
+; For secure IMAP and submission autoconfig, point to mail host.
+_imaps._tcp                      IN   SRV        0 1 993 @
+_submissions._tcp                IN   SRV        0 1 465 @
+
+; Next records specify POP3 and non-TLS ports are not to be used.
+; These are optional and safe to leave out (e.g. if you have to click a lot in a
+; DNS admin web interface).
+_imap._tcp                       IN   SRV        0 0 0 .
+_submission._tcp                 IN   SRV        0 0 0 .
+_pop3._tcp                       IN   SRV        0 0 0 .
+_pop3s._tcp                      IN   SRV        0 0 0 .
+
+; Optional:
+; You could mark Let's Encrypt as the only Certificate Authority allowed to
+; sign TLS certificates for your domain.
+@                                IN   CAA        0 issue "letsencrypt.org"
+
+;
+; Note: After starting up, once an ACME account has been created, CAA records
+; that restrict issuance to the account will be suggested.
+_acme-challenge                  IN   TXT        "fake/XKo9kaBlVnj9q0XWAWdoSYEPCOrhiZk3ztoBHx5c3O6X"
