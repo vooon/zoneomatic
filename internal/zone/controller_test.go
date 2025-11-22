@@ -32,7 +32,7 @@ func TestNew_Bad(t *testing.T) {
 	assert.ErrorIs(err, ErrSoaNotFound)
 }
 
-func TestFile_UpdateDomain(t *testing.T) {
+func TestFile_UpdateDDNSAddress(t *testing.T) {
 
 	testv4, _ := netip.ParseAddr("1.2.3.4")
 	testv6, _ := netip.ParseAddr("2001:dead:beef::1")
@@ -65,7 +65,40 @@ func TestFile_UpdateDomain(t *testing.T) {
 				ctx := context.TODO()
 				f := newZoneTemp(t, tc.file)
 
-				err := f.UpdateDomain(ctx, tc.domain, tc.addrs)
+				err := f.UpdateDDNSAddress(ctx, tc.domain, tc.addrs)
+				assert.NoError(err)
+				assertFiles(t, tc.expectedFile, f.path)
+			})
+		})
+	}
+}
+
+func TestFile_UpdateACMEChallenge(t *testing.T) {
+
+	token := "fake/XKo9kaBlVnj9q0XWAWdoSYEPCOrhiZk3ztoBHx5c3O6X"
+
+	testCases := []struct {
+		name         string
+		file         string
+		domain       string
+		token        string
+		expectedFile string
+	}{
+		{"new-at", "./testdata/at.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-new-at.zone"},
+		{"zot-at", "./testdata/at.example.com.zone", "_acme-challenge.zot", token, "./testdata/expected-acme-new-zot.zone"},
+		{"clean-at", "./testdata/at.example.com.zone", "_acme-challenge.zot", "", "./testdata/expected-acme-clean-at.zone"},
+		//{"new-mx", "./testdata/mx.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-new-mx.zone"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// NOTE: use synctest to have predictable time.New()
+			synctest.Test(t, func(t *testing.T) {
+				assert := assert.New(t)
+				ctx := context.TODO()
+				f := newZoneTemp(t, tc.file)
+
+				err := f.UpdateACMEChallenge(ctx, tc.domain, tc.token)
 				assert.NoError(err)
 				assertFiles(t, tc.expectedFile, f.path)
 			})
