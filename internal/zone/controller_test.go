@@ -87,7 +87,7 @@ func TestFile_UpdateACMEChallenge(t *testing.T) {
 		{"new-at", "./testdata/at.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-new-at.zone"},
 		{"zot-at", "./testdata/at.example.com.zone", "_acme-challenge.zot", token, "./testdata/expected-acme-new-zot.zone"},
 		{"clean-at", "./testdata/at.example.com.zone", "_acme-challenge.zot", "", "./testdata/expected-acme-clean-at.zone"},
-		//{"new-mx", "./testdata/mx.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-new-mx.zone"},
+		{"new-mx", "./testdata/mx.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-new-mx.zone"},
 	}
 
 	for _, tc := range testCases {
