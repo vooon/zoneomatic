@@ -28,9 +28,6 @@ type Controller interface {
 type File struct {
 	origin string
 	path   string
-	stat   os.FileInfo
-	zf     *zonefile.Zonefile // XXX REMOVE: was a bad idea. Anyway i reload it each time.
-	soa    *zonefile.Entry
 	lg     *slog.Logger
 	mu     sync.Mutex
 }
@@ -43,14 +40,15 @@ func New(zonefiles ...string) (Controller, error) {
 
 	ret := make([]*File, 0, len(zonefiles))
 	for _, fl := range zonefiles {
+		fileName := path.Base(fl)
 		f := &File{
 			path: fl,
-			lg:   slog.Default().With("zone_file", path.Base(fl)),
+			lg:   slog.Default().With("zone_file", fileName),
 		}
 
-		err := f.Reload()
+		_, _, err := f.Load()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to load zone: %s: %w", fileName, err)
 		}
 
 		ret = append(ret, f)
@@ -111,32 +109,23 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, tok
 	}
 }
 
-func (s *File) Reload() error {
+func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	st, err := os.Stat(s.path)
-	if err != nil {
-		return err
-	}
-
-	if s.stat == st {
-		// nothing to do
-		s.lg.Debug("File not changed")
-		return nil
-	}
-
 	buf, err := os.ReadFile(s.path)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	zf, parseErr := zonefile.Load(buf)
-	if parseErr != nil {
-		return parseErr
+	var zfErr *zonefile.ParsingError
+	zf, zfErr = zonefile.Load(buf)
+	if zfErr != nil {
+		return nil, nil, zfErr
 	}
 
 	ok := false
+	origin := ""
 	prevDomain := []byte{}
 	for _, ent := range zf.Entries() {
 		if ent.IsComment {
@@ -145,7 +134,7 @@ func (s *File) Reload() error {
 
 		if ent.IsControl {
 			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-				s.origin = string(zonefile.Fqdn(ent.Values()[0]))
+				origin = string(zonefile.Fqdn(ent.Values()[0]))
 			}
 			continue
 		}
@@ -157,31 +146,36 @@ func (s *File) Reload() error {
 			dom = prevDomain
 		}
 
-		ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
+		_ = ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
 
 		if ent.RRType() == dns.TypeSOA {
-			s.soa = &ent
+			soa = &ent
 			ok = true
 		}
 	}
 	if !ok {
-		return fmt.Errorf("SOA not found")
+		return nil, nil, fmt.Errorf("SOA not found")
 	}
 
-	if s.origin == "" {
-		s.origin = string(s.soa.Domain())
+	if origin == "" {
+		origin = string(soa.Domain())
 	}
-	s.stat = st
-	s.zf = zf
 
-	// PrintEntries(zf.Entries(), os.Stdout)
+	if s.origin != origin && s.origin != "" {
+		s.lg.Warn("Changed origin", "prev_origin", s.origin, "new_origin", origin)
+	} else if s.origin != origin {
+		s.lg.Info("Detected origin", "origin", origin)
+	}
+	s.origin = origin
 
-	return nil
+	PrintEntries(zf.Entries(), os.Stdout)
+
+	return
 }
 
 func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error {
 
-	err := s.Reload()
+	zf, _, err := s.Load()
 	if err != nil {
 		return err
 	}
@@ -205,7 +199,7 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
-	allEnt := s.zf.Entries()
+	allEnt := zf.Entries()
 	entA := make([]*zonefile.Entry, 0, len(newA))
 	entAAAA := make([]*zonefile.Entry, 0, len(newAAAA))
 	newent := make([]byte, 0, 1024)
@@ -223,10 +217,10 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 	}
 
 	for i := len(entA); i < len(newA); i++ {
-		newent = fmt.Appendf(newent, "%s IN A %v\n", shortDomain, newA[i])
+		newent = fmt.Appendf(newent, "\n%s IN A %v\n", shortDomain, newA[i])
 	}
 	for i := len(entAAAA); i < len(newAAAA); i++ {
-		newent = fmt.Appendf(newent, "%s IN AAAA %v\n", shortDomain, newAAAA[i])
+		newent = fmt.Appendf(newent, "\n%s IN AAAA %v\n", shortDomain, newAAAA[i])
 	}
 
 	if len(newent) > 0 {
@@ -289,7 +283,7 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
 
-	err := s.Reload()
+	zf, _, err := s.Load()
 	if err != nil {
 		return err
 	}
@@ -299,7 +293,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
-	allEnt := s.zf.Entries()
+	allEnt := zf.Entries()
 	entTXT := make([]*zonefile.Entry, 0, 1)
 	newent := make([]byte, 0, 1024)
 
@@ -314,7 +308,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	}
 
 	if len(entTXT) < 1 {
-		newent = fmt.Appendf(newent, "%s IN TXT \"%v\"\n", shortDomain, token)
+		newent = fmt.Appendf(newent, "\n%s IN TXT \"%v\"\n", shortDomain, token)
 	}
 
 	if len(newent) > 0 {
