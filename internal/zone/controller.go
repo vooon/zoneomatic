@@ -244,12 +244,12 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 	for i, ent := range entA {
 		if i < len(newA) {
-			ent.SetValue(0, []byte(newA[i].String()))
+			_ = ent.SetValue(0, []byte(newA[i].String()))
 			continue
 		}
 
 		if len(newA) != 0 {
-			ent.SetValue(0, []byte(newA[0].String()))
+			_ = ent.SetValue(0, []byte(newA[0].String()))
 		}
 	}
 
