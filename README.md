@@ -1,13 +1,20 @@
 zoneomatic
 ==========
 
-DNS API server for self-hosted DynDNS.
+DNS API server for self-hosted DynDNS / ACME.
 
-I use CoreDNS to serve my zones, unfortunately it does not support nsupdate protocol,
-but can auto-reload modified zone file.
+I use CoreDNS to serve my zones, unfortunately it does not support nsupdate protocol.
+Hopefully is auto-reload modified zone file, so external service can update them.
 
 This project aiming to provide DDNS API similar to *no-ip.com*,
-so existing `ddns-scripts` can interact with it.
+so existing [ddns-scripts][ddns] can interact with it.
+
+As a secondary feature it also provides API, which [acme-sh][acmesh] can use
+to issue TLS certificates using `dns-01` challenge.
+
+It also supports [LEGO HTTP-Request][legohttp] protocol for the same challenge.
+
+You can use OpenWRT package from my feed: [my-openwrt-feed][owrtpkg].
 
 
 Command line options
@@ -140,3 +147,9 @@ GET /health
 -----------
 
 Health check endpoint.
+
+
+[ddns]: https://openwrt.org/docs/guide-user/services/ddns/client
+[acmesh]: https://openwrt.org/docs/guide-user/services/tls/acmesh
+[legohttp]: https://go-acme.github.io/lego/dns/httpreq/
+[owrtpkg]: https://github.com/vooon/my-openwrt-feed/tree/master/zoneomatic
