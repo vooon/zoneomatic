@@ -8,6 +8,7 @@ require (
 	github.com/go-fuego/fuego v0.18.8
 	github.com/miekg/dns v1.1.68
 	github.com/miekg/dnsfmt v0.8.0
+	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
 	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251121154055-1bf9ae667c28
@@ -33,6 +34,7 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826 // indirect
 	github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 // indirect
 	github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 // indirect
+	github.com/otiai10/mint v1.6.3 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/woodsbury/decimal128 v1.4.0 // indirect

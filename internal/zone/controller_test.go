@@ -1,16 +1,97 @@
 package zone
 
 import (
+	"context"
+	"net/netip"
+	"os"
+	"path"
 	"testing"
 
+	fcopy "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNew(t *testing.T) {
+func TestNew_Ok(t *testing.T) {
 	assert := assert.New(t)
 
-	ctrl, err := New("testdata/at.example.com.zone", "testdata/mx.example.com.zone")
+	ctrl, err := New("./testdata/at.example.com.zone", "./testdata/mx.example.com.zone")
 	if assert.NoError(err) {
 		assert.Len(ctrl.(*DomainCtrl).files, 2)
 	}
+}
+
+func TestNew_Bad(t *testing.T) {
+	assert := assert.New(t)
+
+	_, err := New("testdata/not_existing_file.zone")
+	assert.ErrorIs(err, os.ErrNotExist)
+
+	_, err = New("./testdata/bad_no_soa.zone")
+	assert.ErrorIs(err, ErrSoaNotFound)
+}
+
+func TestFile_UpdateDomain(t *testing.T) {
+
+	testv4, _ := netip.ParseAddr("1.2.3.4")
+	testv6, _ := netip.ParseAddr("2001:dead:beef::1")
+
+	testCases := []struct {
+		name         string
+		file         string
+		domain       string
+		addrs        []netip.Addr
+		expectedFile string
+	}{
+		{"new-v4", "./testdata/at.example.com.zone", "new-entry", []netip.Addr{testv4}, "./testdata/expected-new-v4.zone"},
+		{"new-v6", "./testdata/at.example.com.zone", "new-entry", []netip.Addr{testv6}, "./testdata/expected-new-v6.zone"},
+		{"new-v4v6", "./testdata/at.example.com.zone", "new-entry", []netip.Addr{testv4, testv6}, "./testdata/expected-new-v4v6.zone"},
+		{"loop-v4", "./testdata/at.example.com.zone", "loop", []netip.Addr{testv4}, "./testdata/expected-loop-v4.zone"},
+		{"loop-v6", "./testdata/at.example.com.zone", "loop", []netip.Addr{testv6}, "./testdata/expected-loop-v6.zone"},
+		{"loop-v4v6", "./testdata/at.example.com.zone", "loop", []netip.Addr{testv4, testv6}, "./testdata/expected-loop-v4v6.zone"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			ctx := context.TODO()
+			f := newZoneTemp(t, tc.file)
+
+			err := f.UpdateDomain(ctx, tc.domain, tc.addrs)
+			assert.NoError(err)
+			assertFiles(t, tc.expectedFile, f.path)
+		})
+	}
+}
+
+func newZoneTemp(t *testing.T, file string) *File {
+	t.Helper()
+	require := require.New(t)
+
+	tmp := t.TempDir()
+	dest := path.Join(tmp, path.Base(file))
+
+	err := fcopy.Copy(file, dest)
+	require.NoError(err)
+
+	ctrl, err := New(dest)
+	require.NoError(err)
+
+	dct := ctrl.(*DomainCtrl)
+	require.Len(dct.files, 1)
+
+	return dct.files[0]
+}
+
+func assertFiles(t *testing.T, expectedFile, obtainedFile string, msgAndArgs ...any) bool {
+	t.Helper()
+	require := require.New(t)
+
+	b1, err := os.ReadFile(expectedFile)
+	require.NoError(err)
+
+	b2, err := os.ReadFile(obtainedFile)
+	require.NoError(err)
+
+	return assert.Equal(t, string(b1), string(b2), msgAndArgs...)
 }
