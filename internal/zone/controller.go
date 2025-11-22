@@ -363,7 +363,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(allEnt, uglyBuf)
 
-	fmt.Println(string(uglyBuf.String()))
+	// fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
