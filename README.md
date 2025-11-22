@@ -91,6 +91,51 @@ See also: https://github.com/joohoi/acme-dns
 > `ACMEDNS_SUBDOMAIN` - base domain name for which you requesting certificate.
 
 
+POST /present
+-------------
+
+Update ACME DNS TXT record, in LEGO HTTP-request format.
+
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| Authorization | Yes* | HTTP Basic Auth |
+
+JSON Object fields:
+
+| Name | Req | Description | Example |
+|------|-----|-------------|---------|
+| fqdn | Yes | Record name without `_acme-challenge.` | `foo.example.com` |
+| value | Yes | Validation token content for the TXT record | `SomeRandomToken` |
+
+See also: https://go-acme.github.io/lego/dns/httpreq/
+
+> [!NOTE]
+> Only HTTPREQ_MODE=default is supported
+
+
+POST /cleanup
+-------------
+
+Remove ACME DNS TXT record, in LEGO HTTP-request format.
+
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| Authorization | Yes* | HTTP Basic Auth |
+
+JSON Object fields:
+
+| Name | Req | Description | Example |
+|------|-----|-------------|---------|
+| fqdn | Yes | Record name without `_acme-challenge.` | `foo.example.com` |
+| value | No | Validation token content for the TXT record, Ignored | `SomeRandomToken` |
+
+See also: https://go-acme.github.io/lego/dns/httpreq/
+
+
 GET /health
 -----------
 

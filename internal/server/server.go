@@ -26,6 +26,11 @@ type ACMEUpdateResponse struct {
 	TXT string `json:"txt"`
 }
 
+type LegoHttpDefaultRequest struct {
+	Fqdn  string `json:"fqdn" validate:"required"`
+	Value string `json:"value"`
+}
+
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	listener, err := net.Listen("tcp", cli.Listen)
@@ -98,7 +103,6 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 	fuego.Get(srv, "/nic/update",
 		func(ctx fuego.ContextNoBody) (string, error) {
-
 			lg := slog.Default()
 
 			hns := ctx.QueryParamArr("hostname")
@@ -135,7 +139,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				newAddrs = append(newAddrs, a.Addr())
 			}
 
-			err = zctl.UpdateDomain(ctx, domain, newAddrs)
+			err = zctl.UpdateDDNSAddress(ctx, domain, newAddrs)
 			if err != nil {
 				return "", err
 			}
@@ -156,7 +160,6 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 	fuego.PostStd(srv, "/acme/update",
 		func(w http.ResponseWriter, r *http.Request) {
-
 			ctx := r.Context()
 			lg := slog.Default()
 			defer r.Body.Close() // nolint: errcheck
@@ -197,6 +200,64 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		option.AddResponse(http.StatusOK, "Record updated",
 			fuego.Response{
 				Type: new(ACMEUpdateResponse),
+			},
+		),
+	)
+
+	// NOTE: lego uses `/present` in url.JoinPath, so that leading `/` would make impossible to use subpath
+	legoHandler := func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		lg := slog.Default()
+		defer r.Body.Close() // nolint: errcheck
+
+		req, err := fuego.ReadJSON[LegoHttpDefaultRequest](ctx, r.Body)
+		if err != nil {
+			lg.ErrorContext(ctx, "Failed to parse body", "error", err)
+			fuego.SendError(w, r, err)
+			return
+		}
+
+		err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value)
+		if err != nil {
+			fuego.SendError(w, r, err)
+			return
+		}
+
+		fuego.SendJSON(w, r, nil) // nolint: errcheck
+	}
+
+	fuego.PostStd(srv, "/present",
+		legoHandler,
+		option.Summary("update acme via lego httpreq"),
+		option.Description("Update ACME challenge TXT record using LEGO HTTP-REQ"),
+		option.Middleware(authMw),
+		option.Security(
+			openapi3.SecurityRequirement{
+				"basicAuth": []string{},
+			},
+		),
+		option.RequestBody(
+			fuego.RequestBody{
+				Type:         new(LegoHttpDefaultRequest),
+				ContentTypes: []string{"application/json"},
+			},
+		),
+	)
+
+	fuego.PostStd(srv, "/cleanup",
+		legoHandler,
+		option.Summary("cleanup acme via lego httpreq"),
+		option.Description("Clean up ACME challenge TXT record using LEGO HTTP-REQ"),
+		option.Middleware(authMw),
+		option.Security(
+			openapi3.SecurityRequirement{
+				"basicAuth": []string{},
+			},
+		),
+		option.RequestBody(
+			fuego.RequestBody{
+				Type:         new(LegoHttpDefaultRequest),
+				ContentTypes: []string{"application/json"},
 			},
 		),
 	)
