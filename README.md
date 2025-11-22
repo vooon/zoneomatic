@@ -51,6 +51,12 @@ GET /nic/update
 
 Update A/AAAA records.
 
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| Authorization | Yes | HTTP Basic Auth |
+
 Query parameters:
 
 | Name | Req | Description |
@@ -107,7 +113,7 @@ Required HTTP Headers:
 
 | Name | Req | Description |
 |------|-----|-------------|
-| Authorization | Yes* | HTTP Basic Auth |
+| Authorization | Yes | HTTP Basic Auth |
 
 JSON Object fields:
 
@@ -131,7 +137,7 @@ Required HTTP Headers:
 
 | Name | Req | Description |
 |------|-----|-------------|
-| Authorization | Yes* | HTTP Basic Auth |
+| Authorization | Yes | HTTP Basic Auth |
 
 JSON Object fields:
 
