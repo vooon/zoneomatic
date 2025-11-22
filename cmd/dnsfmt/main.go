@@ -21,7 +21,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("dnsfmt: %s", err)
 		}
-		dnsfmt.Reformat(data, []byte(*flagOrigin), os.Stdout, *flagInc)
+		_ = dnsfmt.Reformat(data, []byte(*flagOrigin), os.Stdout, *flagInc)
 		return
 	}
 
@@ -30,6 +30,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("dnsfmt: %s", err)
 		}
-		dnsfmt.Reformat(data, []byte(*flagOrigin), os.Stdout, *flagInc)
+		_ = dnsfmt.Reformat(data, []byte(*flagOrigin), os.Stdout, *flagInc)
 	}
 }
