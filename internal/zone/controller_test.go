@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"testing"
+	"testing/synctest"
 
 	fcopy "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
@@ -53,13 +54,16 @@ func TestFile_UpdateDomain(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert := assert.New(t)
-			ctx := context.TODO()
-			f := newZoneTemp(t, tc.file)
+			// NOTE: use synctest to have predictable time.New()
+			synctest.Test(t, func(t *testing.T) {
+				assert := assert.New(t)
+				ctx := context.TODO()
+				f := newZoneTemp(t, tc.file)
 
-			err := f.UpdateDomain(ctx, tc.domain, tc.addrs)
-			assert.NoError(err)
-			assertFiles(t, tc.expectedFile, f.path)
+				err := f.UpdateDomain(ctx, tc.domain, tc.addrs)
+				assert.NoError(err)
+				assertFiles(t, tc.expectedFile, f.path)
+			})
 		})
 	}
 }
