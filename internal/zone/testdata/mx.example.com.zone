@@ -2,7 +2,7 @@ $ORIGIN mx.example.com
 $TTL 60
 ; SOA Record
 @                  IN   SOA        ns1.example.com. hostmaster.example.com. (
-                                      1754484261   ; serial  Wed, 06 Aug 2025 12:44:21 UTC
+                                      1763822925   ; serial  Sat, 22 Nov 2025 14:48:45 UTC
                                       1H           ; refresh
                                       600          ; retry
                                       1W           ; expire
@@ -33,8 +33,8 @@ $TTL 300
 ; WARNING: Domain does not appear to be DNSSEC-signed. To enable DANE, first
 ; enable DNSSEC on your domain, then add the TLSA records. Records below have been
 ; commented out.
-;; _25._tcp.mx.example.com.        TLSA 3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059
-;; _25._tcp.mx.example.com.        TLSA 3 1 1 208deb23844432a6c35edfab4589304e652c79f0cddce504f9634406b93ecdba
+_25._tcp.mx.example.com.        TLSA 3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059
+_25._tcp.mx.example.com.        TLSA 3 1 1 208deb23844432a6c35edfab4589304e652c79f0cddce504f9634406b93ecdba
 
 ; Deliver email for the domain to this host.
 mx.example.com.                    MX 10 mx.example.com.

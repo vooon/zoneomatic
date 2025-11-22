@@ -267,7 +267,7 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(allEnt, uglyBuf)
 
-	fmt.Println(string(uglyBuf.String()))
+	// fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
@@ -372,27 +372,28 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 
 		if e.IsComment {
 			for _, c := range e.Comments() {
-				fmt.Fprintf(w, "%s\n", c)
+				fmt.Fprintf(w, "%s\n", c) // nolint:errcheck
 			}
 			continue
 		} else if e.IsControl {
-			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" ")))
+			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" "))) // nolint:errcheck
 			continue
 		}
 
-		fmt.Fprintf(w, "%s ", e.Domain())
+		fmt.Fprintf(w, "%s ", e.Domain()) // nolint:errcheck
 		if ttl := e.TTL(); ttl != nil {
-			fmt.Fprintf(w, " %d ", *ttl)
+			fmt.Fprintf(w, " %d ", *ttl) // nolint:errcheck
 		}
 		if cls := e.Class(); cls != nil {
-			fmt.Fprintf(w, " %s ", cls)
+			fmt.Fprintf(w, " %s ", cls) // nolint:errcheck
 		}
 		if typ := e.Type(); typ != nil {
-			fmt.Fprintf(w, " %s ", typ)
+			fmt.Fprintf(w, " %s ", typ) // nolint:errcheck
 		}
 
 		for _, v := range e.Values() {
-			fmt.Fprintf(w, " %s ", v)
+			quoted := strings.ReplaceAll(string(v), `"`, `\"`)
+			fmt.Fprintf(w, " \"%s\" ", quoted) // nolint:errcheck
 		}
 
 		fmt.Fprintln(w) // nolint:errcheck
