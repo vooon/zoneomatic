@@ -37,7 +37,7 @@ func main() {
 		data, err := os.ReadFile(a)
 		kctx.FatalIfErrorf(err)
 
-		var buf = bytes.NewBuffer(nil)
+		buf := bytes.NewBuffer(nil)
 
 		err = dnsfmt.Reformat(data, []byte(cli.Origin), buf, cli.Inc)
 		kctx.FatalIfErrorf(err)
