@@ -21,10 +21,17 @@ import (
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 )
 
+// ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory
 var ErrSoaNotFound = errors.New("SOA not found")
 
+// EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
+const EmptyPlaceholder = "placeholder"
+
+// Controller implements zone file modification methods
 type Controller interface {
-	UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error
+	// UpdateDDNSAddress changes DDNS A/AAAA records
+	UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error
+	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
 	UpdateACMEChallenge(ctx context.Context, domain string, token string) error
 }
 
@@ -49,7 +56,7 @@ func New(zonefiles ...string) (Controller, error) {
 			lg:   slog.Default().With("zone_file", fileName),
 		}
 
-		_, _, err := f.Load()
+		_, _, err := f.load()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load zone: %s: %w", fileName, err)
 		}
@@ -60,7 +67,7 @@ func New(zonefiles ...string) (Controller, error) {
 	return &DomainCtrl{files: ret}, nil
 }
 
-func (s *DomainCtrl) UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error {
+func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
 
 	lg := slog.Default().With("domain", domain)
 
@@ -73,7 +80,7 @@ func (s *DomainCtrl) UpdateDomain(ctx context.Context, domain string, addrs []ne
 		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
 		if strings.HasSuffix(domainDot, fl.origin) {
 			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-			return fl.UpdateDomain(ctx, domainDot, addrs)
+			return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
 		}
 	}
 
@@ -112,10 +119,7 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, tok
 	}
 }
 
-func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	buf, err := os.ReadFile(s.path)
 	if err != nil {
 		return nil, nil, err
@@ -149,7 +153,10 @@ func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 			dom = prevDomain
 		}
 
-		_ = ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
+		err = ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
+		if err != nil {
+			return
+		}
 
 		if ent.RRType() == dns.TypeSOA {
 			soa = &ent
@@ -176,15 +183,14 @@ func (s *File) Load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	return
 }
 
-func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Addr) error {
+func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	zf, _, err := s.Load()
+	zf, _, err := s.load()
 	if err != nil {
 		return err
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	slices.SortFunc(addrs, func(a, b netip.Addr) int {
 		return a.Compare(b)
@@ -205,7 +211,7 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 	allEnt := zf.Entries()
 	entA := make([]*zonefile.Entry, 0, len(newA))
 	entAAAA := make([]*zonefile.Entry, 0, len(newAAAA))
-	newent := make([]byte, 0, 1024)
+	newent := make([]byte, 0, 4096)
 
 	for _, ent := range allEnt {
 		if !bytes.Equal(ent.Domain(), shortDomain) {
@@ -244,23 +250,37 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 
 	for i, ent := range entA {
 		if i < len(newA) {
-			_ = ent.SetValue(0, []byte(newA[i].String()))
+			err = ent.SetValue(0, []byte(newA[i].String()))
+			if err != nil {
+				return err
+			}
+
 			continue
 		}
 
 		if len(newA) != 0 {
-			_ = ent.SetValue(0, []byte(newA[0].String()))
+			err = ent.SetValue(0, []byte(newA[0].String()))
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	for i, ent := range entAAAA {
 		if i < len(newAAAA) {
-			_ = ent.SetValue(0, []byte(newAAAA[i].String()))
+			err = ent.SetValue(0, []byte(newAAAA[i].String()))
+			if err != nil {
+				return err
+			}
+
 			continue
 		}
 
 		if len(newAAAA) != 0 {
-			_ = ent.SetValue(0, []byte(newAAAA[0].String()))
+			err = ent.SetValue(0, []byte(newAAAA[0].String()))
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -285,20 +305,24 @@ func (s *File) UpdateDomain(ctx context.Context, domain string, addrs []netip.Ad
 }
 
 func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	zf, _, err := s.Load()
+	zf, _, err := s.load()
 	if err != nil {
 		return err
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if token == "" {
+		s.lg.Warn("Use placeholder for empty TXT record", "domain", domain)
+		token = EmptyPlaceholder
+	}
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
 	allEnt := zf.Entries()
 	entTXT := make([]*zonefile.Entry, 0, 1)
-	newent := make([]byte, 0, 1024)
+	newent := make([]byte, 0, 4096)
 
 	for _, ent := range allEnt {
 		if !bytes.Equal(ent.Domain(), shortDomain) {
@@ -311,7 +335,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	}
 
 	if len(entTXT) < 1 {
-		newent = fmt.Appendf(newent, "\n%s IN TXT \"%v\"\n", shortDomain, token)
+		newent = fmt.Appendf(newent, "\n%s IN TXT %v\n", shortDomain, quoteTXT(token))
 	}
 
 	if len(newent) > 0 {
@@ -329,13 +353,17 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	}
 
 	for _, ent := range entTXT {
-		ent.SetValue(0, []byte(token))
+		s.lg.Info("4", "vals", ent.Values())
+		err := ent.SetValue(0, []byte(token))
+		if err != nil {
+			return err
+		}
 	}
 
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(allEnt, uglyBuf)
 
-	// fmt.Println(string(uglyBuf.String()))
+	fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
@@ -392,10 +420,13 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 		}
 
 		for _, v := range e.Values() {
-			quoted := strings.ReplaceAll(string(v), `"`, `\"`)
-			fmt.Fprintf(w, " \"%s\" ", quoted) // nolint:errcheck
+			fmt.Fprintf(w, " %s ", quoteTXT(string(v))) // nolint:errcheck
 		}
 
 		fmt.Fprintln(w) // nolint:errcheck
 	}
+}
+
+func quoteTXT(v string) string {
+	return fmt.Sprintf(` "%s" `, strings.ReplaceAll(v, `"`, `\"`))
 }
