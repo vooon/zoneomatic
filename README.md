@@ -14,7 +14,7 @@ to issue TLS certificates using `dns-01` challenge.
 
 It also supports [LEGO HTTP-Request][legohttp] protocol for the same challenge.
 
-You can use OpenWRT package from my feed: [my-openwrt-feed][owrtpkg].
+You can use OpenWRT package from my feed: [vooon/my-openwrt-feed][owrtpkg].
 
 
 Command line options
