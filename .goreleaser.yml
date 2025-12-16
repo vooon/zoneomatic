@@ -2,28 +2,22 @@
 version: 2
 builds:
   -  # First Build
-    env:
-      - CGO_ENABLED=0
     main: ./cmd/zoneomatic
-    ldflags: >-
-      -s -w
-
     binary: bin/{{ .ProjectName }}
-    targets:
-      - linux_amd64
-      - linux_arm64
-
-  -  # dnsfmt
-    env:
-      - CGO_ENABLED=0
-    main: ./cmd/dnsfmt
-    ldflags: >-
+    ldflags: &ldflags >-
       -s -w
-
-    binary: bin/dnsfmt
-    targets:
+    targets: &targets
       - linux_amd64
       - linux_arm64
+    env: &env
+      - CGO_ENABLED=0
+
+  - id: dnsfmt
+    main: ./cmd/dnsfmt
+    binary: bin/dnsfmt
+    ldflags: *ldflags
+    targets: *targets
+    env: *env
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_sha512-checksums.txt"
