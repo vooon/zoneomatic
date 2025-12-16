@@ -5,26 +5,26 @@ go 1.25.4
 require (
 	github.com/alecthomas/kong v1.13.0
 	github.com/getkin/kin-openapi v0.133.0
-	github.com/go-fuego/fuego v0.18.8
-	github.com/miekg/dns v1.1.68
+	github.com/go-fuego/fuego v0.19.0
+	github.com/miekg/dns v1.1.69
 	github.com/miekg/dnsfmt v0.8.0
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251121154055-1bf9ae667c28
-	golang.org/x/crypto v0.45.0
+	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251122214221-67aea8007c83
+	golang.org/x/crypto v0.46.0
 )
 
 replace github.com/vooon/zoneomatic/pkg/dnsfmt => ./pkg/dnsfmt
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gabriel-vasile/mimetype v1.4.11 // indirect
-	github.com/go-openapi/jsonpointer v0.22.3 // indirect
-	github.com/go-openapi/swag/jsonname v0.25.3 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/go-openapi/jsonpointer v0.22.4 // indirect
+	github.com/go-openapi/swag/jsonname v0.25.4 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.28.0 // indirect
+	github.com/go-playground/validator/v10 v10.29.0 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
@@ -38,11 +38,11 @@ require (
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/woodsbury/decimal128 v1.4.0 // indirect
-	golang.org/x/mod v0.30.0 // indirect
-	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sync v0.18.0 // indirect
-	golang.org/x/sys v0.38.0 // indirect
-	golang.org/x/text v0.31.0 // indirect
-	golang.org/x/tools v0.39.0 // indirect
+	golang.org/x/mod v0.31.0 // indirect
+	golang.org/x/net v0.48.0 // indirect
+	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/tools v0.40.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

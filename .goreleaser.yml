@@ -13,6 +13,18 @@ builds:
       - linux_amd64
       - linux_arm64
 
+  -  # dnsfmt
+    env:
+      - CGO_ENABLED=0
+    main: ./cmd/dnsfmt
+    ldflags: >-
+      -s -w
+
+    binary: bin/dnsfmt
+    targets:
+      - linux_amd64
+      - linux_arm64
+
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_sha512-checksums.txt"
   algorithm: sha512
