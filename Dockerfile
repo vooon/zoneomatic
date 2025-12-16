@@ -1,15 +1,16 @@
-FROM golang:alpine AS builder
+FROM ghcr.io/goreleaser/goreleaser-cross:v1.25 AS builder
 
 WORKDIR /build
 
 COPY . .
-RUN go build -o zoneomatic ./cmd/zoneomatic
 
-FROM alpine
+RUN goreleaser build --snapshot --single-target
+
+FROM scratch
 
 LABEL org.opencontainers.image.description="Zone-o-matic DNS API Server"
 
-COPY --from=builder /build/zoneomatic /zoneomatic
+COPY --from=builder /build/dist/zoneomatic*/zoneomatic /zoneomatic
 
 EXPOSE 9999
 
