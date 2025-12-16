@@ -187,6 +187,8 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	changed := false
+
 	zf, _, err := s.load()
 	if err != nil {
 		return err
@@ -227,9 +229,11 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	for i := len(entA); i < len(newA); i++ {
 		newent = fmt.Appendf(newent, "\n%s IN A %v\n", shortDomain, newA[i])
+		changed = true
 	}
 	for i := len(entAAAA); i < len(newAAAA); i++ {
 		newent = fmt.Appendf(newent, "\n%s IN AAAA %v\n", shortDomain, newAAAA[i])
+		changed = true
 	}
 
 	if len(newent) > 0 {
@@ -250,7 +254,8 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	for i, ent := range entA {
 		if i < len(newA) {
-			err = ent.SetValue(0, []byte(newA[i].String()))
+
+			changed, err = setEntryAddr(ent, newA[i], changed)
 			if err != nil {
 				return err
 			}
@@ -259,7 +264,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 		}
 
 		if len(newA) != 0 {
-			err = ent.SetValue(0, []byte(newA[0].String()))
+			changed, err = setEntryAddr(ent, newA[0], changed)
 			if err != nil {
 				return err
 			}
@@ -268,7 +273,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	for i, ent := range entAAAA {
 		if i < len(newAAAA) {
-			err = ent.SetValue(0, []byte(newAAAA[i].String()))
+			changed, err = setEntryAddr(ent, newAAAA[i], changed)
 			if err != nil {
 				return err
 			}
@@ -277,11 +282,16 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 		}
 
 		if len(newAAAA) != 0 {
-			err = ent.SetValue(0, []byte(newAAAA[0].String()))
+			changed, err = setEntryAddr(ent, newAAAA[0], changed)
 			if err != nil {
 				return err
 			}
 		}
+	}
+
+	if !changed {
+		s.lg.InfoContext(ctx, "domain not changed", "domain", domain)
+		return nil
 	}
 
 	uglyBuf := bytes.NewBuffer(nil)
@@ -429,4 +439,17 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 
 func quoteTXT(v string) string {
 	return fmt.Sprintf(` "%s" `, strings.ReplaceAll(v, `"`, `\"`))
+}
+
+func setEntryAddr(ent *zonefile.Entry, addr netip.Addr, prevChanged bool) (changed bool, err error) {
+	baddr := []byte(addr.String())
+	changed = prevChanged
+
+	ov := ent.Values()
+	if len(ov) > 0 && !slices.Equal(ov[0], baddr) {
+		changed = true
+	}
+
+	err = ent.SetValue(0, baddr)
+	return
 }
