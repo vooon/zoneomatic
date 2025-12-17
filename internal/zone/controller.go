@@ -363,7 +363,13 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	}
 
 	for _, ent := range entTXT {
-		s.lg.Info("4", "vals", ent.Values())
+		vals := ent.Values()
+		if len(vals) == 1 {
+			s.lg.Info("Replace value", "old_value", string(vals[0]), "new_value", token)
+		} else if len(vals) > 1 {
+			s.lg.Warn("Possibly bad record matched", "vals", vals)
+		}
+
 		err := ent.SetValue(0, []byte(token))
 		if err != nil {
 			return err

@@ -31,6 +31,12 @@ type LegoHttpDefaultRequest struct {
 	Value string `json:"value"`
 }
 
+// NOTE: LEGO do not check responses, but acme.sh acmeproxy - expect to see copy of original message
+type LegoHttpDefaultResponse struct {
+	Fqdn  string `json:"fqdn"`
+	Value string `json:"value"`
+}
+
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	listener, err := net.Listen("tcp", cli.Listen)
@@ -205,29 +211,27 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 	)
 
 	// NOTE: lego uses `/present` in url.JoinPath, so that leading `/` would make impossible to use subpath
-	legoHandler := func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		lg := slog.Default()
-		defer r.Body.Close() // nolint: errcheck
-
-		req, err := fuego.ReadJSON[LegoHttpDefaultRequest](ctx, r.Body)
-		if err != nil {
-			lg.ErrorContext(ctx, "Failed to parse body", "error", err)
-			fuego.SendError(w, r, err)
-			return
-		}
-
-		err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value)
-		if err != nil {
-			fuego.SendError(w, r, err)
-			return
-		}
-
-		fuego.SendJSON(w, r, nil) // nolint: errcheck
-	}
-
 	fuego.PostStd(srv, "/present",
-		legoHandler,
+		func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			lg := slog.Default()
+			defer r.Body.Close() // nolint: errcheck
+
+			req, err := fuego.ReadJSON[LegoHttpDefaultRequest](ctx, r.Body)
+			if err != nil {
+				lg.ErrorContext(ctx, "Failed to parse body", "error", err)
+				fuego.SendError(w, r, err)
+				return
+			}
+
+			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value)
+			if err != nil {
+				fuego.SendError(w, r, err)
+				return
+			}
+
+			fuego.SendJSON(w, r, &LegoHttpDefaultResponse{Fqdn: req.Fqdn, Value: req.Value}) // nolint: errcheck
+		},
 		option.Summary("update acme via lego httpreq"),
 		option.Description("Update ACME challenge TXT record using LEGO HTTP-REQ"),
 		option.Middleware(authMw),
@@ -242,10 +246,35 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				ContentTypes: []string{"application/json"},
 			},
 		),
+		option.AddResponse(http.StatusOK, "Record updated",
+			fuego.Response{
+				Type: new(LegoHttpDefaultResponse),
+			},
+		),
 	)
 
 	fuego.PostStd(srv, "/cleanup",
-		legoHandler,
+		func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			lg := slog.Default()
+			defer r.Body.Close() // nolint: errcheck
+
+			req, err := fuego.ReadJSON[LegoHttpDefaultRequest](ctx, r.Body)
+			if err != nil {
+				lg.ErrorContext(ctx, "Failed to parse body", "error", err)
+				fuego.SendError(w, r, err)
+				return
+			}
+
+			// NOTE: lego sends which txt value to remove, but i do not support multiple ACME TXTs anyway
+			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, "")
+			if err != nil {
+				fuego.SendError(w, r, err)
+				return
+			}
+
+			fuego.SendJSON(w, r, &LegoHttpDefaultResponse{Fqdn: req.Fqdn, Value: req.Value}) // nolint: errcheck
+		},
 		option.Summary("cleanup acme via lego httpreq"),
 		option.Description("Clean up ACME challenge TXT record using LEGO HTTP-REQ"),
 		option.Middleware(authMw),
@@ -258,6 +287,11 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			fuego.RequestBody{
 				Type:         new(LegoHttpDefaultRequest),
 				ContentTypes: []string{"application/json"},
+			},
+		),
+		option.AddResponse(http.StatusOK, "Record updated",
+			fuego.Response{
+				Type: new(LegoHttpDefaultResponse),
 			},
 		),
 	)
