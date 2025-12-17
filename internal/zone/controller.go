@@ -32,7 +32,7 @@ type Controller interface {
 	// UpdateDDNSAddress changes DDNS A/AAAA records
 	UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error
 	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
-	UpdateACMEChallenge(ctx context.Context, domain string, token string) error
+	UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error
 }
 
 type File struct {
@@ -91,7 +91,7 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 	}
 }
 
-func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
+func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error {
 
 	lg := slog.Default().With("domain", domain)
 
@@ -108,7 +108,7 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, tok
 		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
 		if strings.HasSuffix(domainDot, fl.origin) {
 			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-			return fl.UpdateACMEChallenge(ctx, domainDot, token)
+			return fl.UpdateACMEChallenge(ctx, domainDot, newToken, oldToken)
 		}
 	}
 
@@ -314,7 +314,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 	return nil
 }
 
-func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token string) error {
+func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -323,9 +323,10 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 		return err
 	}
 
-	if token == "" {
-		s.lg.Warn("Use placeholder for empty TXT record", "domain", domain)
-		token = EmptyPlaceholder
+	lg := s.lg.With("domain", domain)
+	if newToken == "" {
+		lg.Warn("Use placeholder for empty TXT record")
+		newToken = EmptyPlaceholder
 	}
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
@@ -340,12 +341,25 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 		}
 
 		if ent.RRType() == dns.TypeTXT {
-			entTXT = append(entTXT, &ent)
+			if oldToken == "" {
+				// ACMEDNS mode - replace all TXTs
+				entTXT = append(entTXT, &ent)
+			} else {
+				// HTTP-REQ mode - replace only matching TXTs
+				vals := ent.Values()
+				if len(vals) == 1 && bytes.Equal(vals[0], []byte(oldToken)) {
+					entTXT = append(entTXT, &ent)
+					if oldToken == EmptyPlaceholder {
+						// leave other placeholders for next requests
+						break
+					}
+				}
+			}
 		}
 	}
 
 	if len(entTXT) < 1 {
-		newent = fmt.Appendf(newent, "\n%s IN TXT %v\n", shortDomain, quoteTXT(token))
+		newent = fmt.Appendf(newent, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
 	}
 
 	if len(newent) > 0 {
@@ -365,12 +379,12 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 	for _, ent := range entTXT {
 		vals := ent.Values()
 		if len(vals) == 1 {
-			s.lg.Info("Replace value", "old_value", string(vals[0]), "new_value", token)
+			lg.Info("Replace value", "old_value", string(vals[0]), "new_value", newToken)
 		} else if len(vals) > 1 {
-			s.lg.Warn("Possibly bad record matched", "vals", vals)
+			lg.Warn("Possibly bad record matched", "vals", vals)
 		}
 
-		err := ent.SetValue(0, []byte(token))
+		err := ent.SetValue(0, []byte(newToken))
 		if err != nil {
 			return err
 		}
@@ -389,7 +403,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, token str
 
 	err = os.WriteFile(s.path, ret.Bytes(), 0644)
 	if err != nil {
-		s.lg.ErrorContext(ctx, "Failed to save file", "error", err)
+		lg.ErrorContext(ctx, "Failed to save file", "error", err)
 		return err
 	}
 

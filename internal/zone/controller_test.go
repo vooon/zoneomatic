@@ -98,7 +98,7 @@ func TestFile_UpdateACMEChallenge(t *testing.T) {
 				ctx := context.TODO()
 				f := newZoneTemp(t, tc.file)
 
-				err := f.UpdateACMEChallenge(ctx, tc.domain, tc.token)
+				err := f.UpdateACMEChallenge(ctx, tc.domain, tc.token, "")
 				assert.NoError(err)
 				assertFiles(t, tc.expectedFile, f.path)
 			})

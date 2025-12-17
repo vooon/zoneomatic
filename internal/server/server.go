@@ -177,7 +177,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return
 			}
 
-			err = zctl.UpdateACMEChallenge(ctx, req.Subdomain, req.TXT)
+			err = zctl.UpdateACMEChallenge(ctx, req.Subdomain, req.TXT, "")
 			if err != nil {
 				fuego.SendError(w, r, err)
 				return
@@ -224,7 +224,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return
 			}
 
-			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value)
+			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value, zone.EmptyPlaceholder)
 			if err != nil {
 				fuego.SendError(w, r, err)
 				return
@@ -267,7 +267,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			}
 
 			// NOTE: lego sends which txt value to remove, but i do not support multiple ACME TXTs anyway
-			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, "")
+			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, "", req.Value)
 			if err != nil {
 				fuego.SendError(w, r, err)
 				return
