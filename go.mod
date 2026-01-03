@@ -11,7 +11,7 @@ require (
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251122214221-67aea8007c83
+	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251217135751-569c5b6c46ab
 	golang.org/x/crypto v0.46.0
 )
 
@@ -24,7 +24,7 @@ require (
 	github.com/go-openapi/swag/jsonname v0.25.4 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
-	github.com/go-playground/validator/v10 v10.29.0 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/schema v1.4.1 // indirect
