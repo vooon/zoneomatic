@@ -5,6 +5,7 @@ package zonefile
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,35 @@ func (e Entry) Comments() (ret [][]byte) {
 		ret = append(ret, e.tokens[is[i]].t.Value())
 	}
 	return
+}
+
+func (e Entry) Equal(e2 Entry) bool {
+	if e.IsControl != e2.IsControl ||
+		e.IsComment != e2.IsComment ||
+		!slices.Equal(e.Command(), e2.Command()) ||
+		!slices.Equal(e.Domain(), e2.Domain()) ||
+		!slices.Equal(e.Class(), e2.Class()) ||
+		!slices.Equal(e.Type(), e2.Type()) {
+		return false
+	}
+
+	v1 := e.Values()
+	v2 := e2.Values()
+	if !slices.EqualFunc(v1, v2, func(vv1, vv2 []byte) bool {
+		return slices.Equal(vv1, vv2)
+	}) {
+		return false
+	}
+
+	ttl1 := e.TTL()
+	ttl2 := e2.TTL()
+	if ttl1 == nil && ttl2 == nil {
+		return true
+	} else if ttl1 != nil && ttl2 != nil && *ttl1 == *ttl2 {
+		return true
+	}
+
+	return false
 }
 
 // Find all indices of tokens with the given use.

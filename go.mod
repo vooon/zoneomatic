@@ -7,10 +7,10 @@ require (
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-fuego/fuego v0.19.0
 	github.com/miekg/dns v1.1.69
-	github.com/miekg/dnsfmt v0.8.0
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
+	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251217135751-569c5b6c46ab
 	golang.org/x/crypto v0.46.0
 )
 

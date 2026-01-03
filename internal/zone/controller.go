@@ -17,8 +17,8 @@ import (
 
 	"github.com/go-fuego/fuego"
 	"github.com/miekg/dns"
-	"github.com/miekg/dnsfmt/zonefile"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
+	"github.com/vooon/zoneomatic/pkg/zonefile"
 )
 
 // ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory

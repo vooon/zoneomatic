@@ -44,9 +44,8 @@ type ZMUpdateRequest struct {
 }
 
 type ZMUpdateResponse struct {
-	Fqdn     string `json:"fqdn"`
-	OldValue string `json:"old_value"`
-	NewValue string `json:"new_value"`
+	Fqdn    string `json:"fqdn"`
+	Changed bool   `json:"changed"`
 }
 
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
@@ -315,12 +314,12 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return nil, err
 			}
 
-			old, err := zctl.UpdateRecord(ctx, req.Fqdn, req.Type, req.Value, false)
+			//old, err := zctl.UpdateRecord(ctx, req.Fqdn, req.Type, req.Value, false)
 			if err != nil {
 				return nil, err
 			}
 
-			return &ZMUpdateResponse{Fqdn: req.Fqdn, OldValue: old, NewValue: req.Value}, nil
+			return &ZMUpdateResponse{Fqdn: req.Fqdn, Changed: false}, nil
 		},
 		option.Summary("update any dns record"),
 		option.Description("Replace any existing DNS record value"),

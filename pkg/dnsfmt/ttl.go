@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/miekg/dnsfmt/zonefile"
+	"github.com/vooon/zoneomatic/pkg/zonefile"
 )
 
 const (

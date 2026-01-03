@@ -7,7 +7,7 @@ import (
 	"log"
 
 	"github.com/miekg/dns"
-	"github.com/miekg/dnsfmt/zonefile"
+	"github.com/vooon/zoneomatic/pkg/zonefile"
 )
 
 func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
