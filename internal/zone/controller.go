@@ -24,7 +24,8 @@ import (
 // ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory
 var (
 	ErrSoaNotFound    = errors.New("SOA not found")
-	ErrRecordNotFound = errors.New("Record not found")
+	ErrRecordNotFound = errors.New("record not found")
+	ErrNoMatchers     = errors.New("no record matchers provided")
 )
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
@@ -41,6 +42,14 @@ type Controller interface {
 	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
 	UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error
 }
+
+type Matcher struct {
+	Domain []byte
+	RRType uint16
+	Values [][]byte
+}
+
+type Matchers []Matcher
 
 type File struct {
 	origin string
@@ -130,6 +139,48 @@ func (s *DomainCtrl) UpdateRecords(ctx context.Context, domain string, types []u
 	return false, nil
 }
 
+func (m Matcher) Match(e zonefile.Entry) bool {
+	if m.Domain != nil && !bytes.Equal(e.Domain(), m.Domain) {
+		return false
+	}
+
+	if m.RRType > 0 && m.RRType != e.RRType() {
+		return false
+	}
+
+	if m.Values != nil && !slices.EqualFunc(e.Values(), m.Values, bytes.Equal) {
+		return false
+	}
+
+	return true
+}
+
+func (m Matcher) String() string {
+	args := make([]string, 0, 3)
+
+	if m.Domain != nil {
+		args = append(args, fmt.Sprintf("domain:%s", m.Domain))
+	}
+	if m.RRType > 0 {
+		args = append(args, fmt.Sprintf("rrtype:%s", dns.TypeToString[m.RRType]))
+	}
+	if m.Values != nil {
+		args = append(args, fmt.Sprintf("value:%v", m.Values))
+	}
+
+	return fmt.Sprintf("Match(%s)", strings.Join(args, " "))
+}
+
+func (mm Matchers) Match(e zonefile.Entry) bool {
+	for _, m := range mm {
+		if m.Match(e) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	buf, err := os.ReadFile(s.path)
 	if err != nil {
@@ -194,26 +245,30 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	return
 }
 
-func (s *File) updateRecords(ctx context.Context, domain string, rrTypes []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
-	lg := s.lg.With("domain", domain, "rr_types", rrTypes)
+func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
+	lg := lg1.With("matchers", matchers)
+
+	if len(matchers) == 0 {
+		return false, ErrNoMatchers
+	}
 
 	zf, _, err := s.load()
 	if err != nil {
 		return
 	}
 
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-
 	// 1. Copy all non-matching elements, insert new values on the place of first element
-	allEnt := zf.Entries()
-	newEntries := make([]zonefile.Entry, 0, len(allEnt))
+	oldEntries := zf.Entries()
+	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
 	found := false
-	for idx, ent := range allEnt {
-		if bytes.Equal(ent.Domain(), shortDomain) && slices.Contains(rrTypes, ent.RRType()) {
+	for idx, ent := range oldEntries {
+		if matchers.Match(ent) {
 			if !found {
-				lg.DebugContext(ctx, "First matching record found", "index", idx)
+				lg.DebugContext(ctx, "First matching record found", "index", idx, "old_values", ent.ValuesStrings())
 				newEntries = append(newEntries, values...)
 				found = true
+			} else {
+				lg.DebugContext(ctx, "Remove matching record", "index", idx, "old_values", ent.ValuesStrings())
 			}
 			continue
 		}
@@ -224,32 +279,50 @@ func (s *File) updateRecords(ctx context.Context, domain string, rrTypes []uint1
 	// 2. If old record not found - add new values to the end, if allowed
 	if !found {
 		if !allowNew {
-			lg.ErrorContext(ctx, "Record not found, insert new is not allowed.")
-			return false, fmt.Errorf("%w: %s %v", ErrRecordNotFound, domain, rrTypes)
+			lg.ErrorContext(ctx, "No matching record not found, but insert is not allowed.")
+			return false, ErrRecordNotFound
 		}
 
-		lg.DebugContext(ctx, "Record not found, inserting to the end")
+		lg.DebugContext(ctx, "No matching record not found, but inserting to the end")
 		newEntries = append(newEntries, values...)
 	}
 
 	// 3. Check if file changed
-	changed = len(allEnt) != len(newEntries)
+	changed = !slices.EqualFunc(oldEntries, newEntries, func(e1, e2 zonefile.Entry) bool {
+		return e1.Equal(e2)
+	})
+
 	if !changed {
+		lg.InfoContext(ctx, "No records changed", "changed", changed)
+		return
 	}
 
-	return false, nil
+	uglyBuf := bytes.NewBuffer(nil)
+	PrintEntries(newEntries, uglyBuf)
+
+	// fmt.Println(string(uglyBuf.String()))
+
+	ret := bytes.NewBuffer(nil)
+	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
+	if err != nil {
+		return
+	}
+
+	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	if err != nil {
+		lg.ErrorContext(ctx, "Failed to save file", "error", err, "changed", changed)
+		return
+	}
+
+	lg.InfoContext(ctx, "File saved", "changed", changed)
+	return
 }
 
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	changed := false
-
-	zf, _, err := s.load()
-	if err != nil {
-		return err
-	}
+	lg := s.lg.With("domain", domain, "new_addrs", addrs)
 
 	slices.SortFunc(addrs, func(a, b netip.Addr) int {
 		return a.Compare(b)
@@ -266,105 +339,30 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 	}
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
+	newentbuf := bytes.NewBuffer(nil)
 
-	allEnt := zf.Entries()
-	entA := make([]*zonefile.Entry, 0, len(newA))
-	entAAAA := make([]*zonefile.Entry, 0, len(newAAAA))
-	newent := make([]byte, 0, 4096)
-
-	for _, ent := range allEnt {
-		if !bytes.Equal(ent.Domain(), shortDomain) {
-			continue
-		}
-
-		if ent.RRType() == dns.TypeA {
-			entA = append(entA, &ent)
-		} else if ent.RRType() == dns.TypeAAAA {
-			entAAAA = append(entAAAA, &ent)
-		}
+	for _, addr := range newA {
+		_, _ = fmt.Fprintf(newentbuf, "\n%s IN A %v\n", shortDomain, addr)
+	}
+	for _, addr := range newAAAA {
+		_, _ = fmt.Fprintf(newentbuf, "\n%s IN AAAA %v\n", shortDomain, addr)
 	}
 
-	for i := len(entA); i < len(newA); i++ {
-		newent = fmt.Appendf(newent, "\n%s IN A %v\n", shortDomain, newA[i])
-		changed = true
-	}
-	for i := len(entAAAA); i < len(newAAAA); i++ {
-		newent = fmt.Appendf(newent, "\n%s IN AAAA %v\n", shortDomain, newAAAA[i])
-		changed = true
-	}
-
-	if len(newent) > 0 {
-		zf2, err := zonefile.Load(newent)
-		if err != nil {
-			return err
-		}
-
-		for _, ent := range zf2.Entries() {
-			allEnt = append(allEnt, ent)
-			if ent.RRType() == dns.TypeA {
-				entA = append(entA, &ent)
-			} else if ent.RRType() == dns.TypeAAAA {
-				entAAAA = append(entAAAA, &ent)
-			}
-		}
-	}
-
-	for i, ent := range entA {
-		if i < len(newA) {
-
-			changed, err = setEntryAddr(ent, newA[i], changed)
-			if err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		if len(newA) != 0 {
-			changed, err = setEntryAddr(ent, newA[0], changed)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	for i, ent := range entAAAA {
-		if i < len(newAAAA) {
-			changed, err = setEntryAddr(ent, newAAAA[i], changed)
-			if err != nil {
-				return err
-			}
-
-			continue
-		}
-
-		if len(newAAAA) != 0 {
-			changed, err = setEntryAddr(ent, newAAAA[0], changed)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	if !changed {
-		s.lg.InfoContext(ctx, "domain not changed", "domain", domain)
-		return nil
-	}
-
-	uglyBuf := bytes.NewBuffer(nil)
-	PrintEntries(allEnt, uglyBuf)
-
-	// fmt.Println(string(uglyBuf.String()))
-
-	ret := bytes.NewBuffer(nil)
-	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
+	values, err := parseEntries(newentbuf)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	matchers := make(Matchers, 0, 2)
+	if len(newA) > 0 {
+		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeA})
+	}
+	if len(newAAAA) > 0 {
+		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeAAAA})
+	}
+
+	_, err = s.updateRecords(ctx, lg, matchers, values, true)
 	if err != nil {
-		s.lg.ErrorContext(ctx, "Failed to save file", "error", err)
 		return err
 	}
 
@@ -375,11 +373,6 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	zf, _, err := s.load()
-	if err != nil {
-		return err
-	}
-
 	lg := s.lg.With("domain", domain)
 	if newToken == "" {
 		lg.Warn("Use placeholder for empty TXT record")
@@ -388,79 +381,31 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
-	allEnt := zf.Entries()
-	entTXT := make([]*zonefile.Entry, 0, 1)
-	newent := make([]byte, 0, 4096)
+	newentbuf := bytes.NewBuffer(nil)
+	_, _ = fmt.Fprintf(newentbuf, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
 
-	for _, ent := range allEnt {
-		if !bytes.Equal(ent.Domain(), shortDomain) {
-			continue
-		}
-
-		if ent.RRType() == dns.TypeTXT {
-			if oldToken == "" {
-				// ACMEDNS mode - replace all TXTs
-				entTXT = append(entTXT, &ent)
-			} else {
-				// HTTP-REQ mode - replace only matching TXTs
-				vals := ent.Values()
-				if len(vals) == 1 && bytes.Equal(vals[0], []byte(oldToken)) {
-					entTXT = append(entTXT, &ent)
-					if oldToken == EmptyPlaceholder {
-						// leave other placeholders for next requests
-						break
-					}
-				}
-			}
-		}
-	}
-
-	if len(entTXT) < 1 {
-		newent = fmt.Appendf(newent, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
-	}
-
-	if len(newent) > 0 {
-		zf2, err := zonefile.Load(newent)
-		if err != nil {
-			return err
-		}
-
-		for _, ent := range zf2.Entries() {
-			allEnt = append(allEnt, ent)
-			if ent.RRType() == dns.TypeTXT {
-				entTXT = append(entTXT, &ent)
-			}
-		}
-	}
-
-	for _, ent := range entTXT {
-		vals := ent.Values()
-		if len(vals) == 1 {
-			lg.Info("Replace value", "old_value", string(vals[0]), "new_value", newToken)
-		} else if len(vals) > 1 {
-			lg.Warn("Possibly bad record matched", "vals", vals)
-		}
-
-		err := ent.SetValue(0, []byte(newToken))
-		if err != nil {
-			return err
-		}
-	}
-
-	uglyBuf := bytes.NewBuffer(nil)
-	PrintEntries(allEnt, uglyBuf)
-
-	// fmt.Println(string(uglyBuf.String()))
-
-	ret := bytes.NewBuffer(nil)
-	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
+	values, err := parseEntries(newentbuf)
 	if err != nil {
 		return err
 	}
 
-	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	var oldValues [][]byte // nil - ACME DNS mode - replace all TXTs
+	if oldToken != "" {    // HTTP-REQ mode - replace only matching old token
+		oldValues = [][]byte{
+			[]byte(oldToken),
+		}
+	}
+
+	matchers := []Matcher{
+		{
+			Domain: shortDomain,
+			RRType: dns.TypeTXT,
+			Values: oldValues,
+		},
+	}
+
+	_, err = s.updateRecords(ctx, lg, matchers, values, true)
 	if err != nil {
-		lg.ErrorContext(ctx, "Failed to save file", "error", err)
 		return err
 	}
 
@@ -518,15 +463,11 @@ func quoteTXT(v string) string {
 	return fmt.Sprintf(` "%s" `, strings.ReplaceAll(v, `"`, `\"`))
 }
 
-func setEntryAddr(ent *zonefile.Entry, addr netip.Addr, prevChanged bool) (changed bool, err error) {
-	baddr := []byte(addr.String())
-	changed = prevChanged
-
-	ov := ent.Values()
-	if len(ov) > 0 && !slices.Equal(ov[0], baddr) {
-		changed = true
+func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {
+	zf, err := zonefile.Load(zonebuf.Bytes())
+	if err != nil {
+		return nil, err
 	}
 
-	err = ent.SetValue(0, baddr)
-	return
+	return zf.Entries(), nil
 }

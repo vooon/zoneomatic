@@ -115,6 +115,17 @@ func (e Entry) Equal(e2 Entry) bool {
 	return false
 }
 
+func (e Entry) ValuesStrings() []string {
+	vals := e.Values()
+	ret := make([]string, 0, len(vals))
+
+	for _, v := range vals {
+		ret = append(ret, string(v))
+	}
+
+	return ret
+}
+
 // Find all indices of tokens with the given use.
 func (e Entry) find(use tokenUse) (is []int) {
 	for i := 0; i < len(e.tokens); i++ {

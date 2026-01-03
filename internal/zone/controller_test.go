@@ -2,6 +2,7 @@ package zone
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path"
@@ -136,4 +137,18 @@ func assertFiles(t *testing.T, expectedFile, obtainedFile string, msgAndArgs ...
 	require.NoError(err)
 
 	return assert.Equal(t, string(b1), string(b2), msgAndArgs...)
+}
+
+func TestMain(m *testing.M) {
+	logLevel := slog.LevelDebug
+
+	handler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: logLevel,
+		// AddSource: true,
+	})
+
+	slog.SetDefault(slog.New(handler))
+
+	// Run the tests
+	os.Exit(m.Run())
 }
