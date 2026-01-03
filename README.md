@@ -1,5 +1,5 @@
-zoneomatic
-==========
+Zone-o-Matic
+============
 
 DNS API server for self-hosted DynDNS / ACME.
 
@@ -147,6 +147,28 @@ JSON Object fields:
 | value | No | Validation token content for the TXT record, Ignored | `SomeRandomToken` |
 
 See also: https://go-acme.github.io/lego/dns/httpreq/
+
+
+POST /zm/update
+---------------
+
+Custom Zone-o-matic call.
+Allow to update any existing record(s).
+Match records by FQDN and type, then each value will be translated to a record.
+
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| Authorization | Yes | HTTP Basic Auth |
+
+JSON Object fields:
+
+| Name | Req | Description | Example |
+|------|-----|-------------|---------|
+| fqdn | Yes | Record domain name. | `foo.example.com` |
+| type | Yes | Record type. | `NS` |
+| values | Yes | List of records values | `["ns1", "ns2"]` |
 
 
 GET /health

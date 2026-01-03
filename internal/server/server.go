@@ -38,9 +38,9 @@ type LegoHttpDefaultResponse struct {
 }
 
 type ZMUpdateRequest struct {
-	Fqdn  string `json:"fqdn" validate:"required"`
-	Type  string `json:"type" validate:"required"`
-	Value string `json:"value" validate:"required"`
+	Fqdn   string   `json:"fqdn" validate:"required"`
+	Type   string   `json:"type" validate:"required"`
+	Values []string `json:"values" validate:"required"`
 }
 
 type ZMUpdateResponse struct {
@@ -314,12 +314,12 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return nil, err
 			}
 
-			//old, err := zctl.UpdateRecord(ctx, req.Fqdn, req.Type, req.Value, false)
+			changed, err := zctl.ZMUpdateRecord(ctx, req.Fqdn, req.Type, req.Values)
 			if err != nil {
 				return nil, err
 			}
 
-			return &ZMUpdateResponse{Fqdn: req.Fqdn, Changed: false}, nil
+			return &ZMUpdateResponse{Fqdn: req.Fqdn, Changed: changed}, nil
 		},
 		option.Summary("update any dns record"),
 		option.Description("Replace any existing DNS record value"),
@@ -329,17 +329,6 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				"basicAuth": []string{},
 			},
 		),
-		option.RequestBody(
-			fuego.RequestBody{
-				// Type:         new(LegoHttpDefaultRequest),
-				ContentTypes: []string{"application/json"},
-			},
-		),
-		// option.AddResponse(http.StatusOK, "Record updated",
-		// 	fuego.Response{
-		// 		Type: new(LegoHttpDefaultResponse),
-		// 	},
-		// ),
 	)
 
 }

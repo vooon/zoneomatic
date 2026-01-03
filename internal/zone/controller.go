@@ -33,14 +33,12 @@ const EmptyPlaceholder = "placeholder"
 
 // Controller implements zone file modification methods
 type Controller interface {
-	// UpdateRecords replace records values
-	// match record domain and type(s), then replace all of them with new values
-	// UpdateRecords(ctx context.Context, domain string, types []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error)
-
 	// UpdateDDNSAddress changes DDNS A/AAAA records
 	UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error
 	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
 	UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error
+	// ZMUpdateRecord replace record values
+	ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error)
 }
 
 type Matcher struct {
@@ -135,8 +133,28 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 	}
 }
 
-func (s *DomainCtrl) UpdateRecords(ctx context.Context, domain string, types []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
-	return false, nil
+func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error) {
+
+	lg := slog.Default().With("domain", domain)
+
+	domainDot := domain
+	if !strings.HasSuffix(domainDot, ".") {
+		domainDot += "."
+	}
+
+	for _, fl := range s.files {
+		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
+		if strings.HasSuffix(domainDot, fl.origin) {
+			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+			return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
+		}
+	}
+
+	return false, &fuego.HTTPError{
+		Title:  "zone not found",
+		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
+		Status: http.StatusNotFound,
+	}
 }
 
 func (m Matcher) Match(e zonefile.Entry) bool {
@@ -287,7 +305,7 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		newEntries = append(newEntries, values...)
 	}
 
-	// 3. Check if file changed
+	// 3. Check if it is changed
 	changed = !slices.EqualFunc(oldEntries, newEntries, func(e1, e2 zonefile.Entry) bool {
 		return e1.Equal(e2)
 	})
@@ -297,6 +315,7 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		return
 	}
 
+	// 4. Update file
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(newEntries, uglyBuf)
 
@@ -373,7 +392,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	lg := s.lg.With("domain", domain)
+	lg := s.lg.With("domain", domain, "old_token", oldToken, "new_token", newToken)
 	if newToken == "" {
 		lg.Warn("Use placeholder for empty TXT record")
 		newToken = EmptyPlaceholder
@@ -410,6 +429,39 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	}
 
 	return nil
+}
+
+func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, newValues []string) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lg := s.lg.With("domain", domain, "new_values", newValues)
+
+	rrType, ok := dns.StringToType[typ]
+	if !ok {
+		return false, fmt.Errorf("unknown rrtype: %s", typ)
+	}
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+	newentbuf := bytes.NewBuffer(nil)
+
+	for _, val := range newValues {
+		_, _ = fmt.Fprintf(newentbuf, "\n%s IN %s %s\n", shortDomain, typ, val)
+	}
+
+	values, err := parseEntries(newentbuf)
+	if err != nil {
+		return false, err
+	}
+
+	matchers := []Matcher{
+		{
+			Domain: shortDomain,
+			RRType: rrType,
+		},
+	}
+
+	return s.updateRecords(ctx, lg, matchers, values, false)
 }
 
 func StripOrigin(name, origin string) string {
