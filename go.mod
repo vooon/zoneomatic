@@ -11,11 +11,13 @@ require (
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.8.1
 	github.com/stretchr/testify v1.11.1
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20251217135751-569c5b6c46ab
 	golang.org/x/crypto v0.46.0
 )
 
-replace github.com/vooon/zoneomatic/pkg/dnsfmt => ./pkg/dnsfmt
+replace (
+	github.com/vooon/zoneomatic/pkg/dnsfmt => ./pkg/dnsfmt
+	github.com/vooon/zoneomatic/pkg/zonefile => ./pkg/zonefile
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

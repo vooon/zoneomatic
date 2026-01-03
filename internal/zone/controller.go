@@ -22,13 +22,20 @@ import (
 )
 
 // ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory
-var ErrSoaNotFound = errors.New("SOA not found")
+var (
+	ErrSoaNotFound    = errors.New("SOA not found")
+	ErrRecordNotFound = errors.New("Record not found")
+)
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
 const EmptyPlaceholder = "placeholder"
 
 // Controller implements zone file modification methods
 type Controller interface {
+	// UpdateRecords replace records values
+	// match record domain and type(s), then replace all of them with new values
+	// UpdateRecords(ctx context.Context, domain string, types []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error)
+
 	// UpdateDDNSAddress changes DDNS A/AAAA records
 	UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error
 	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
@@ -119,6 +126,10 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 	}
 }
 
+func (s *DomainCtrl) UpdateRecords(ctx context.Context, domain string, types []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
+	return false, nil
+}
+
 func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	buf, err := os.ReadFile(s.path)
 	if err != nil {
@@ -181,6 +192,52 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	// PrintEntries(zf.Entries(), os.Stdout)
 
 	return
+}
+
+func (s *File) updateRecords(ctx context.Context, domain string, rrTypes []uint16, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
+	lg := s.lg.With("domain", domain, "rr_types", rrTypes)
+
+	zf, _, err := s.load()
+	if err != nil {
+		return
+	}
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+
+	// 1. Copy all non-matching elements, insert new values on the place of first element
+	allEnt := zf.Entries()
+	newEntries := make([]zonefile.Entry, 0, len(allEnt))
+	found := false
+	for idx, ent := range allEnt {
+		if bytes.Equal(ent.Domain(), shortDomain) && slices.Contains(rrTypes, ent.RRType()) {
+			if !found {
+				lg.DebugContext(ctx, "First matching record found", "index", idx)
+				newEntries = append(newEntries, values...)
+				found = true
+			}
+			continue
+		}
+
+		newEntries = append(newEntries, ent)
+	}
+
+	// 2. If old record not found - add new values to the end, if allowed
+	if !found {
+		if !allowNew {
+			lg.ErrorContext(ctx, "Record not found, insert new is not allowed.")
+			return false, fmt.Errorf("%w: %s %v", ErrRecordNotFound, domain, rrTypes)
+		}
+
+		lg.DebugContext(ctx, "Record not found, inserting to the end")
+		newEntries = append(newEntries, values...)
+	}
+
+	// 3. Check if file changed
+	changed = len(allEnt) != len(newEntries)
+	if !changed {
+	}
+
+	return false, nil
 }
 
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {

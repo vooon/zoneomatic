@@ -30,3 +30,4 @@ go.work.sum
 *.swp
 doc/openapi.json
 dist/
+vendor/
