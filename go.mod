@@ -3,7 +3,7 @@ module github.com/vooon/zoneomatic
 go 1.25.4
 
 require (
-	github.com/alecthomas/kong v1.13.0
+	github.com/alecthomas/kong v1.14.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/go-fuego/fuego v0.19.0
 	github.com/miekg/dns v1.1.72
