@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -11,6 +12,8 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/go-fuego/fuego"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/vooon/zoneomatic/internal/zone"
 )
 
 type fakeHTPasswd struct {
@@ -28,9 +31,13 @@ func (f fakeHTPasswd) Authenticate(user, password string) (ok, present bool) {
 type fakeZoneController struct {
 	lastDomain string
 	lastAddrs  []netip.Addr
+	ddnsErr    error
 }
 
 func (f *fakeZoneController) UpdateDDNSAddress(_ context.Context, domain string, addrs []netip.Addr) error {
+	if f.ddnsErr != nil {
+		return f.ddnsErr
+	}
 	f.lastDomain = domain
 	f.lastAddrs = addrs
 	return nil
@@ -139,4 +146,19 @@ func TestNICUpdate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNICUpdate_ZoneNotFoundMappedTo404(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{
+		ddnsErr: fmt.Errorf("wrapped: %w", zone.ErrZoneNotFound),
+	}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodGet, "/nic/update?hostname=test.example.com&myip=1.2.3.4", nil)
+	req.SetBasicAuth("u", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"net/netip"
 	"os"
 	"path"
@@ -16,7 +15,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/go-fuego/fuego"
 	"github.com/miekg/dns"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
@@ -27,6 +25,8 @@ var (
 	ErrSoaNotFound    = errors.New("SOA not found")
 	ErrRecordNotFound = errors.New("record not found")
 	ErrNoMatchers     = errors.New("no record matchers provided")
+	ErrOriginChanged  = errors.New("zone origin changed")
+	ErrZoneNotFound   = errors.New("zone not found")
 )
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
@@ -97,11 +97,7 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 		return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
 	}
 
-	return &fuego.HTTPError{
-		Title:  "zone not found",
-		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
-		Status: http.StatusNotFound,
-	}
+	return fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
 }
 
 func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error {
@@ -123,11 +119,7 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 		return fl.UpdateACMEChallenge(ctx, domainDot, newToken, oldToken)
 	}
 
-	return &fuego.HTTPError{
-		Title:  "zone not found",
-		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
-		Status: http.StatusNotFound,
-	}
+	return fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
 }
 
 func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error) {
@@ -145,11 +137,7 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 		return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
 	}
 
-	return false, &fuego.HTTPError{
-		Title:  "zone not found",
-		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
-		Status: http.StatusNotFound,
-	}
+	return false, fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
 }
 
 func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDot string) *File {
@@ -275,12 +263,12 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 		origin = string(soa.Domain())
 	}
 
-	if s.origin != origin && s.origin != "" {
-		s.lg.Warn("Changed origin", "prev_origin", s.origin, "new_origin", origin)
-	} else if s.origin != origin {
+	if s.origin == "" {
 		s.lg.Info("Detected origin", "origin", origin)
+		s.origin = origin
+	} else if s.origin != origin {
+		return nil, nil, fmt.Errorf("%w: prev=%s new=%s", ErrOriginChanged, s.origin, origin)
 	}
-	s.origin = origin
 
 	// PrintEntries(zf.Entries(), os.Stdout)
 
@@ -461,6 +449,7 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ne
 
 	lg := s.lg.With("domain", domain, "new_values", newValues)
 
+	typ = strings.ToUpper(strings.TrimSpace(typ))
 	rrType, ok := dns.StringToType[typ]
 	if !ok {
 		return false, fmt.Errorf("unknown rrtype: %s", typ)

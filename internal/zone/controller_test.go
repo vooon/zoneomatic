@@ -108,6 +108,18 @@ func TestFile_UpdateACMEChallenge(t *testing.T) {
 	}
 }
 
+func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.TODO()
+		f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+		changed, err := f.ZMUpdateRecord(ctx, "loop", "a", []string{"1.2.3.4"})
+		require.NoError(t, err)
+		assert.True(t, changed)
+		assertFiles(t, "./testdata/expected-loop-v4.zone", f.path)
+	})
+}
+
 func newZoneTemp(t *testing.T, file string) *File {
 	t.Helper()
 	require := require.New(t)

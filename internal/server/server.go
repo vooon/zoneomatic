@@ -14,6 +14,7 @@ import (
 	"github.com/go-fuego/fuego/option"
 	"github.com/go-fuego/fuego/param"
 	"github.com/pires/go-proxyproto"
+
 	"github.com/vooon/zoneomatic/internal/htpasswd"
 	"github.com/vooon/zoneomatic/internal/zone"
 )
@@ -162,7 +163,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 			err = zctl.UpdateDDNSAddress(ctx, domain, newAddrs)
 			if err != nil {
-				return "", err
+				return "", zoneErrorToHTTPError(err)
 			}
 
 			return "OK", nil
@@ -194,7 +195,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 			err = zctl.UpdateACMEChallenge(ctx, req.Subdomain, req.TXT, "")
 			if err != nil {
-				fuego.SendError(w, r, err)
+				fuego.SendError(w, r, zoneErrorToHTTPError(err))
 				return
 			}
 
@@ -241,7 +242,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, req.Value, zone.EmptyPlaceholder)
 			if err != nil {
-				fuego.SendError(w, r, err)
+				fuego.SendError(w, r, zoneErrorToHTTPError(err))
 				return
 			}
 
@@ -284,7 +285,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			// NOTE: lego sends which txt value to remove, but i do not support multiple ACME TXTs anyway
 			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, "", req.Value)
 			if err != nil {
-				fuego.SendError(w, r, err)
+				fuego.SendError(w, r, zoneErrorToHTTPError(err))
 				return
 			}
 
@@ -320,7 +321,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 			changed, err := zctl.ZMUpdateRecord(ctx, req.Fqdn, req.Type, req.Values)
 			if err != nil {
-				return nil, err
+				return nil, zoneErrorToHTTPError(err)
 			}
 
 			return &ZMUpdateResponse{Fqdn: req.Fqdn, Changed: changed}, nil
@@ -343,4 +344,16 @@ func badRequestError(detail string) *fuego.HTTPError {
 		Detail: detail,
 		Status: http.StatusBadRequest,
 	}
+}
+
+func zoneErrorToHTTPError(err error) error {
+	if errors.Is(err, zone.ErrZoneNotFound) {
+		return &fuego.HTTPError{
+			Title:  "zone not found",
+			Detail: err.Error(),
+			Status: http.StatusNotFound,
+		}
+	}
+
+	return err
 }

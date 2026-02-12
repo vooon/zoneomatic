@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+
 	"github.com/vooon/zoneomatic/internal/htpasswd"
 	"github.com/vooon/zoneomatic/internal/zone"
 )
