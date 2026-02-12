@@ -117,3 +117,21 @@ func TestFormatInvalidInputReturnsError(t *testing.T) {
 		t.Fatal("expected reformat error for invalid zone input")
 	}
 }
+
+func TestFormatTXTMultiKeepsParenthesizedForm(t *testing.T) {
+	const mess = `$ORIGIN example.org.
+@ IN TXT ("abc" "def")
+`
+	out := &bytes.Buffer{}
+	if err := Reformat([]byte(mess), nil, out, false); err != nil {
+		t.Fatalf("unexpected reformat error: %v", err)
+	}
+
+	got := out.String()
+	if !bytes.Contains([]byte(got), []byte("TXT        (\n")) {
+		t.Fatalf("expected parenthesized TXT form, got:\n%s", got)
+	}
+	if !bytes.Contains([]byte(got), []byte(`"abc"`)) || !bytes.Contains([]byte(got), []byte(`"def"`)) {
+		t.Fatalf("expected both TXT chunks, got:\n%s", got)
+	}
+}

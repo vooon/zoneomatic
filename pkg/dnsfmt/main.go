@@ -178,14 +178,16 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 		values := e.Values()
 		switch e.RRType() {
 		case dns.TypeTXT:
-			fmt.Fprintf(w, Space3)
-			space := ""
-			// TODO: insert new lines when multiple blocks and longer then certain....
-			for _, v := range values {
-				fmt.Fprintf(w, "%s%q", space, v)
-				space = " "
+			if len(values) <= 1 {
+				fmt.Fprintf(w, "%s%q\n", Space3, values[0])
+				break
 			}
-			fmt.Fprintln(w)
+
+			fmt.Fprintf(w, "%s(\n", Space3)
+			for _, v := range values {
+				fmt.Fprintf(w, "%-*s%s%q\n", longestname+Indent, " ", Space3, v)
+			}
+			closeBrace(w, longestname)
 
 		case dns.TypeCAA:
 			fmt.Fprintf(w, Space3)
