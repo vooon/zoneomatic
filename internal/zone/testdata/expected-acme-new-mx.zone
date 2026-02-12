@@ -32,14 +32,8 @@ $TTL 300
 ; WARNING: Domain does not appear to be DNSSEC-signed. To enable DANE, first
 ; enable DNSSEC on your domain, then add the TLSA records. Records below have been
 ; commented out.
-_25._tcp                         IN   TLSA       3 1 1 (
-                                                    bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c696591
-                                                    4f57d5059    
-                                                    )
-                                 IN   TLSA       3 1 1 (
-                                                    208deb23844432a6c35edfab4589304e652c79f0cddce504f963440
-                                                    6b93ecdba    
-                                                    )
+_25._tcp                         IN   TLSA       3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059
+                                 IN   TLSA       3 1 1 208deb23844432a6c35edfab4589304e652c79f0cddce504f9634406b93ecdba
 
 ; Deliver email for the domain to this host.
 @                                IN   MX         10 @

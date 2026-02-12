@@ -135,3 +135,21 @@ func TestFormatTXTMultiKeepsParenthesizedForm(t *testing.T) {
 		t.Fatalf("expected both TXT chunks, got:\n%s", got)
 	}
 }
+
+func TestFormatTLSAStaysOneLine(t *testing.T) {
+	const mess = `$ORIGIN example.org.
+_25._tcp.example.org. TLSA 3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059
+`
+	out := &bytes.Buffer{}
+	if err := Reformat([]byte(mess), nil, out, false); err != nil {
+		t.Fatalf("unexpected reformat error: %v", err)
+	}
+
+	got := out.String()
+	if bytes.Contains([]byte(got), []byte("TLSA       3 1 1 (\n")) {
+		t.Fatalf("expected one-line TLSA form, got:\n%s", got)
+	}
+	if !bytes.Contains([]byte(got), []byte("TLSA       3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059")) {
+		t.Fatalf("expected full one-line TLSA value, got:\n%s", got)
+	}
+}

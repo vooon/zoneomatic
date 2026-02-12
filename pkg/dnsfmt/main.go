@@ -218,7 +218,8 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 			closeBrace(w, longestname)
 
 		case dns.TypeTLSA:
-			fallthrough
+			fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(values, []byte(" ")))
+
 		case dns.TypeCDS, dns.TypeDS:
 			fallthrough
 		case dns.TypeCDNSKEY:
