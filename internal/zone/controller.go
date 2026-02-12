@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -90,12 +91,10 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 		domainDot += "."
 	}
 
-	for _, fl := range s.files {
-		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
-		if strings.HasSuffix(domainDot, fl.origin) {
-			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-			return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
-		}
+	fl := s.findZoneFile(ctx, lg, domainDot)
+	if fl != nil {
+		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+		return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
 	}
 
 	return &fuego.HTTPError{
@@ -118,12 +117,10 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 		domainDot = "_acme-challenge." + domainDot
 	}
 
-	for _, fl := range s.files {
-		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
-		if strings.HasSuffix(domainDot, fl.origin) {
-			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-			return fl.UpdateACMEChallenge(ctx, domainDot, newToken, oldToken)
-		}
+	fl := s.findZoneFile(ctx, lg, domainDot)
+	if fl != nil {
+		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+		return fl.UpdateACMEChallenge(ctx, domainDot, newToken, oldToken)
 	}
 
 	return &fuego.HTTPError{
@@ -142,12 +139,10 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 		domainDot += "."
 	}
 
-	for _, fl := range s.files {
-		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
-		if strings.HasSuffix(domainDot, fl.origin) {
-			lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-			return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
-		}
+	fl := s.findZoneFile(ctx, lg, domainDot)
+	if fl != nil {
+		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+		return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
 	}
 
 	return false, &fuego.HTTPError{
@@ -155,6 +150,35 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 		Detail: fmt.Sprintf("zone not found for domain: %s", domain),
 		Status: http.StatusNotFound,
 	}
+}
+
+func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDot string) *File {
+	var best *File
+	bestLen := -1
+	for _, fl := range s.files {
+		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
+		if !domainMatchesOrigin(domainDot, fl.origin) {
+			continue
+		}
+		if l := len(fl.origin); l > bestLen {
+			best = fl
+			bestLen = l
+		}
+	}
+	return best
+}
+
+func domainMatchesOrigin(domain, origin string) bool {
+	if domain == origin {
+		return true
+	}
+
+	originNoDot := strings.TrimSuffix(origin, ".")
+	if originNoDot == "" {
+		return false
+	}
+
+	return strings.HasSuffix(domain, "."+originNoDot+".")
 }
 
 func (m Matcher) Match(e zonefile.Entry) bool {
@@ -327,7 +351,7 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		return
 	}
 
-	err = os.WriteFile(s.path, ret.Bytes(), 0644)
+	err = writeFileAtomically(s.path, ret.Bytes())
 	if err != nil {
 		lg.ErrorContext(ctx, "Failed to save file", "error", err, "changed", changed)
 		return
@@ -522,4 +546,37 @@ func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {
 	}
 
 	return zf.Entries(), nil
+}
+
+func writeFileAtomically(filename string, data []byte) error {
+	mode := os.FileMode(0644)
+	if st, err := os.Stat(filename); err == nil {
+		mode = st.Mode().Perm()
+	}
+
+	dir := filepath.Dir(filename)
+	tmp, err := os.CreateTemp(dir, filepath.Base(filename)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // nolint:errcheck
+
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpName, filename)
 }

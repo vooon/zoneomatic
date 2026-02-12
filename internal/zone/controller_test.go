@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path"
+	"path/filepath"
 	"testing"
 	"testing/synctest"
 
@@ -151,4 +152,42 @@ func TestMain(m *testing.M) {
 
 	// Run the tests
 	os.Exit(m.Run())
+}
+
+func TestDomainMatchesOrigin(t *testing.T) {
+	assert.True(t, domainMatchesOrigin("example.com.", "example.com."))
+	assert.True(t, domainMatchesOrigin("a.example.com.", "example.com."))
+	assert.False(t, domainMatchesOrigin("badexample.com.", "example.com."))
+}
+
+func TestFindZoneFile_PrefersLongestOrigin(t *testing.T) {
+	ctrl := &DomainCtrl{
+		files: []*File{
+			{origin: "example.com.", path: "/tmp/example.com.zone"},
+			{origin: "sub.example.com.", path: "/tmp/sub.example.com.zone"},
+		},
+	}
+
+	got := ctrl.findZoneFile(context.Background(), slog.Default(), "a.sub.example.com.")
+	require.NotNil(t, got)
+	assert.Equal(t, "sub.example.com.", got.origin)
+}
+
+func TestWriteFileAtomically_PreservesMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	filename := filepath.Join(tmpDir, "zonefile.zone")
+
+	err := os.WriteFile(filename, []byte("old"), 0600)
+	require.NoError(t, err)
+
+	err = writeFileAtomically(filename, []byte("new"))
+	require.NoError(t, err)
+
+	buf, err := os.ReadFile(filename)
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(buf))
+
+	st, err := os.Stat(filename)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0600), st.Mode().Perm())
 }

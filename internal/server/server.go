@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -129,6 +130,9 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			if len(hns) > 1 {
 				lg.WarnContext(ctx, "Update more than one hostname not supported", "hostnames", hns)
 			}
+			if len(hns) == 0 || hns[0] == "" {
+				return "", badRequestError("missing required query parameter: hostname")
+			}
 			domain := hns[0]
 
 			var err error
@@ -144,13 +148,13 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 			}
 			if err != nil {
 				lg.ErrorContext(ctx, "Failed to parse myip", "error", err)
-				return "", err
+				return "", badRequestError(fmt.Sprintf("invalid ip in myip/myipv6: %v", err))
 			}
 
 			if len(newAddrs) == 0 {
 				a, err := netip.ParseAddrPort(ctx.Request().RemoteAddr)
 				if err != nil {
-					return "", err
+					return "", badRequestError(fmt.Sprintf("failed to detect remote ip: %v", err))
 				}
 
 				newAddrs = append(newAddrs, a.Addr())
@@ -331,4 +335,12 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		),
 	)
 
+}
+
+func badRequestError(detail string) *fuego.HTTPError {
+	return &fuego.HTTPError{
+		Title:  "bad request",
+		Detail: detail,
+		Status: http.StatusBadRequest,
+	}
 }

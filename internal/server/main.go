@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -59,12 +61,18 @@ func Main() {
 
 	go func() {
 		err := srv.Run()
-		if err != nil {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("Server run failed", "error", err)
 		}
 	}()
 
 	// serve until sigint/sigterm
 	<-ctx.Done()
-	srv.Shutdown(context.Background()) // nolint:errcheck
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("Server shutdown failed", "error", err)
+	}
 }
