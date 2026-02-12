@@ -14,7 +14,9 @@ $ORIGIN example.org.
 example.org.		IN	NS  ns.example.org.
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out, false)
+	if err := Reformat([]byte(mess), nil, out, false); err != nil {
+		t.Fatalf("unexpected reformat error: %v", err)
+	}
 	if out.String() != `$TTL 6H
 $ORIGIN example.org.
 @               IN   SOA        ns miek.miek.nl. (
@@ -36,7 +38,9 @@ func TestFormatCommentStart(t *testing.T) {
 $ORIGIN example.nl.
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out, false)
+	if err := Reformat([]byte(mess), nil, out, false); err != nil {
+		t.Fatalf("unexpected reformat error: %v", err)
+	}
 	if out.String() != `; example.nl,v 1.00 2015/03/19 14:31:47 root Exp
 $ORIGIN example.nl.
 ` {
@@ -73,7 +77,9 @@ x               IN      CNAME   a
 nlgids          IN      CNAME   a
 `
 	out := &bytes.Buffer{}
-	Reformat([]byte(mess), nil, out, false)
+	if err := Reformat([]byte(mess), nil, out, false); err != nil {
+		t.Fatalf("unexpected reformat error: %v", err)
+	}
 	if out.String() != `$ORIGIN miek.nl.
 @                    IN   SOA        linode miek (
                                         1282630063   ; serial  Tue, 24 Aug 2010 06:07:43 UTC
@@ -99,5 +105,15 @@ x                    IN   CNAME      a
 nlgids               IN   CNAME      a
 ` {
 		t.Fatalf("failed to properly reformat\n%s\n", out.String())
+	}
+}
+
+func TestFormatInvalidInputReturnsError(t *testing.T) {
+	const mess = `$ORIGIN example.org.
+@ IN SOA`
+	out := &bytes.Buffer{}
+
+	if err := Reformat([]byte(mess), nil, out, false); err == nil {
+		t.Fatal("expected reformat error for invalid zone input")
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 
 	"github.com/miekg/dns"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
@@ -15,7 +14,7 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 
 	zf, perr := zonefile.Load(data)
 	if perr != nil {
-		log.Fatalf("dnsfmt: error on line %d: %s", perr.LineNo, perr)
+		return fmt.Errorf("dnsfmt: parse error on line %d: %w", perr.LineNo, perr)
 	}
 
 	// 2 loops: finding and striping the  origin and some admin, and then actually reformatting.
@@ -34,7 +33,9 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 			continue
 		}
 
-		e.SetDomain(StripOrigin(origin, e.Domain()))
+		if err := e.SetDomain(StripOrigin(origin, e.Domain())); err != nil {
+			return fmt.Errorf("set domain: %w", err)
+		}
 
 		// count number of types per name, as we want to group singletons.
 		if !bytes.Equal(prevname, e.Domain()) && len(prevname) > 0 {
@@ -56,26 +57,36 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 				origin = zonefile.Fqdn(e.Domain())
 			}
 
-			e.SetValue(0, StripOrigin(origin, values[0]))
-			e.SetValue(1, StripOrigin(origin, values[1]))
+			if err := e.SetValue(0, StripOrigin(origin, values[0])); err != nil {
+				return fmt.Errorf("set SOA mname: %w", err)
+			}
+			if err := e.SetValue(1, StripOrigin(origin, values[1])); err != nil {
+				return fmt.Errorf("set SOA rname: %w", err)
+			}
 
 		case dns.TypeSRV:
 			if len(values) < 4 {
 				return fmt.Errorf("malformed SRV RR: %v", values)
 			}
-			e.SetValue(3, StripOrigin(origin, values[3]))
+			if err := e.SetValue(3, StripOrigin(origin, values[3])); err != nil {
+				return fmt.Errorf("set SRV target: %w", err)
+			}
 
 		case dns.TypeRRSIG:
 			if len(values) < 8 {
 				return fmt.Errorf("malformed RRSIG RR: %v", values)
 			}
-			e.SetValue(7, StripOrigin(origin, values[7]))
+			if err := e.SetValue(7, StripOrigin(origin, values[7])); err != nil {
+				return fmt.Errorf("set RRSIG signer: %w", err)
+			}
 
 		case dns.TypeMX:
 			if len(values) < 2 {
 				return fmt.Errorf("malformed MX RR: %v", values)
 			}
-			e.SetValue(1, StripOrigin(origin, values[1]))
+			if err := e.SetValue(1, StripOrigin(origin, values[1])); err != nil {
+				return fmt.Errorf("set MX exchange: %w", err)
+			}
 
 		case dns.TypePTR:
 			fallthrough
@@ -87,7 +98,9 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 			if len(values) < 1 {
 				return fmt.Errorf("malformed RR: %v", values)
 			}
-			e.SetValue(0, StripOrigin(origin, values[0]))
+			if err := e.SetValue(0, StripOrigin(origin, values[0])); err != nil {
+				return fmt.Errorf("set rr target: %w", err)
+			}
 		}
 
 		if l := len(e.Domain()); l > longestname {

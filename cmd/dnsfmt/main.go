@@ -7,6 +7,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
+	"github.com/vooon/zoneomatic/pkg/fileutil"
 )
 
 type Cli struct {
@@ -43,7 +44,7 @@ func main() {
 		kctx.FatalIfErrorf(err)
 
 		if cli.Replace {
-			err = os.WriteFile(a, buf.Bytes(), 0644)
+			err = fileutil.AtomicWriteFile(a, buf.Bytes())
 			kctx.FatalIfErrorf(err)
 		} else {
 			_, err = io.Copy(os.Stdout, buf)

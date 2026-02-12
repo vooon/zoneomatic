@@ -10,13 +10,13 @@ import (
 	"net/netip"
 	"os"
 	"path"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 
 	"github.com/miekg/dns"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
+	"github.com/vooon/zoneomatic/pkg/fileutil"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
 )
 
@@ -339,7 +339,7 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		return
 	}
 
-	err = writeFileAtomically(s.path, ret.Bytes())
+	err = fileutil.AtomicWriteFile(s.path, ret.Bytes())
 	if err != nil {
 		lg.ErrorContext(ctx, "Failed to save file", "error", err, "changed", changed)
 		return
@@ -535,37 +535,4 @@ func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {
 	}
 
 	return zf.Entries(), nil
-}
-
-func writeFileAtomically(filename string, data []byte) error {
-	mode := os.FileMode(0644)
-	if st, err := os.Stat(filename); err == nil {
-		mode = st.Mode().Perm()
-	}
-
-	dir := filepath.Dir(filename)
-	tmp, err := os.CreateTemp(dir, filepath.Base(filename)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // nolint:errcheck
-
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpName, filename)
 }

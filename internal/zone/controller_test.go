@@ -13,6 +13,7 @@ import (
 	fcopy "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vooon/zoneomatic/pkg/fileutil"
 )
 
 func TestNew_Ok(t *testing.T) {
@@ -185,14 +186,14 @@ func TestFindZoneFile_PrefersLongestOrigin(t *testing.T) {
 	assert.Equal(t, "sub.example.com.", got.origin)
 }
 
-func TestWriteFileAtomically_PreservesMode(t *testing.T) {
+func TestAtomicWriteFile_PreservesMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	filename := filepath.Join(tmpDir, "zonefile.zone")
 
 	err := os.WriteFile(filename, []byte("old"), 0600)
 	require.NoError(t, err)
 
-	err = writeFileAtomically(filename, []byte("new"))
+	err = fileutil.AtomicWriteFile(filename, []byte("new"))
 	require.NoError(t, err)
 
 	buf, err := os.ReadFile(filename)
