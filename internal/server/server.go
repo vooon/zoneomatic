@@ -74,6 +74,13 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 						WithType("http").
 						WithScheme("basic"),
 				},
+				"pdnsApiKeyAuth": {
+					Value: openapi3.NewSecurityScheme().
+						WithType("apiKey").
+						WithIn("header").
+						WithName("X-API-Key").
+						WithDescription("static api key"),
+				},
 				"apiUserAuth": {
 					Value: openapi3.NewSecurityScheme().
 						WithType("apiKey").
@@ -98,6 +105,7 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Controller) {
 
 	authMw := htpasswd.NewBasicAuthMiddleware(htp)
+	registerPDNSEndpoints(srv, htp, zctl)
 
 	fuego.Get(srv, "/health",
 		func(ctx fuego.ContextNoBody) (string, error) {

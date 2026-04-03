@@ -2,11 +2,13 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -28,10 +30,55 @@ func (f fakeHTPasswd) Authenticate(user, password string) (ok, present bool) {
 	return password == f.pass, true
 }
 
+func (f fakeHTPasswd) AuthenticateAny(password string) bool {
+	return password == f.pass
+}
+
+type fakeRRSetReplaceCall struct {
+	zoneName string
+	name     string
+	typ      string
+	ttl      int
+	values   []string
+}
+
+type fakeRRSetDeleteCall struct {
+	zoneName string
+	name     string
+	typ      string
+}
+
 type fakeZoneController struct {
 	lastDomain string
 	lastAddrs  []netip.Addr
 	ddnsErr    error
+	zones      map[string]zone.ZoneSnapshot
+	getZoneErr error
+	replaceErr error
+	deleteErr  error
+	replaced   []fakeRRSetReplaceCall
+	deleted    []fakeRRSetDeleteCall
+}
+
+func (f *fakeZoneController) ListZones(_ context.Context) ([]zone.ZoneSnapshot, error) {
+	ret := make([]zone.ZoneSnapshot, 0, len(f.zones))
+	for _, zoneData := range f.zones {
+		ret = append(ret, zoneData)
+	}
+
+	return ret, nil
+}
+
+func (f *fakeZoneController) GetZone(_ context.Context, zoneName string) (zone.ZoneSnapshot, error) {
+	if f.getZoneErr != nil {
+		return zone.ZoneSnapshot{}, f.getZoneErr
+	}
+
+	if zoneData, ok := f.zones[zoneName]; ok {
+		return zoneData, nil
+	}
+
+	return zone.ZoneSnapshot{}, fmt.Errorf("wrapped: %w", zone.ErrZoneNotFound)
 }
 
 func (f *fakeZoneController) UpdateDDNSAddress(_ context.Context, domain string, addrs []netip.Addr) error {
@@ -47,6 +94,36 @@ func (f *fakeZoneController) UpdateACMEChallenge(_ context.Context, _ string, _,
 	return nil
 }
 
+func (f *fakeZoneController) ReplaceRRSet(_ context.Context, zoneName, name, typ string, ttl int, values []string) (changed bool, err error) {
+	if f.replaceErr != nil {
+		return false, f.replaceErr
+	}
+
+	f.replaced = append(f.replaced, fakeRRSetReplaceCall{
+		zoneName: zoneName,
+		name:     name,
+		typ:      typ,
+		ttl:      ttl,
+		values:   append([]string(nil), values...),
+	})
+
+	return true, nil
+}
+
+func (f *fakeZoneController) DeleteRRSet(_ context.Context, zoneName, name, typ string) (changed bool, err error) {
+	if f.deleteErr != nil {
+		return false, f.deleteErr
+	}
+
+	f.deleted = append(f.deleted, fakeRRSetDeleteCall{
+		zoneName: zoneName,
+		name:     name,
+		typ:      typ,
+	})
+
+	return true, nil
+}
+
 func (f *fakeZoneController) ZMUpdateRecord(_ context.Context, _ string, _ string, _ []string) (changed bool, err error) {
 	return false, nil
 }
@@ -59,6 +136,12 @@ func newTestServer(htp fakeHTPasswd, zctl *fakeZoneController) *fuego.Server {
 					Value: openapi3.NewSecurityScheme().
 						WithType("http").
 						WithScheme("basic"),
+				},
+				"pdnsApiKeyAuth": {
+					Value: openapi3.NewSecurityScheme().
+						WithType("apiKey").
+						WithIn("header").
+						WithName("X-API-Key"),
 				},
 				"apiUserAuth": {
 					Value: openapi3.NewSecurityScheme().
@@ -161,4 +244,121 @@ func TestNICUpdate_ZoneNotFoundMappedTo404(t *testing.T) {
 	srv.Mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestPDNSServerDiscovery(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost", nil)
+	req.Header.Set("X-API-Key", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "localhost", body["id"])
+	assert.Equal(t, "authoritative", body["daemon_type"])
+}
+
+func TestPDNSZoneGet(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{
+		zones: map[string]zone.ZoneSnapshot{
+			"example.com.": {
+				ID:     "example.com.",
+				Name:   "example.com.",
+				Serial: 123,
+				RRsets: []zone.RRSet{{
+					Name:    "www.example.com.",
+					Type:    "A",
+					TTL:     60,
+					Records: []string{"1.2.3.4"},
+				}},
+			},
+		},
+	}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost/zones/example.com.?rrsets=false", nil)
+	req.Header.Set("X-API-Key", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	var body map[string]any
+	assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "example.com.", body["id"])
+	_, hasRRsets := body["rrsets"]
+	assert.False(t, hasRRsets)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost/zones/example.com.", nil)
+	req.Header.Set("X-API-Key", "p")
+	rec = httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	rrsets, hasRRsets := body["rrsets"].([]any)
+	assert.True(t, hasRRsets)
+	assert.Len(t, rrsets, 1)
+}
+
+func TestPDNSPatchZoneReplaceAndDelete(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv := newTestServer(htp, zctl)
+
+	patchBody := `{"rrsets":[{"name":"www.example.com.","type":"A","ttl":60,"changetype":"REPLACE","records":[{"content":"1.2.3.4","disabled":false}]},{"name":"old.example.com.","type":"TXT","changetype":"DELETE","records":[]}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/servers/localhost/zones/example.com.", strings.NewReader(patchBody))
+	req.Header.Set("X-API-Key", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Len(t, zctl.replaced, 1)
+	assert.Equal(t, fakeRRSetReplaceCall{
+		zoneName: "example.com.",
+		name:     "www.example.com.",
+		typ:      "A",
+		ttl:      60,
+		values:   []string{"1.2.3.4"},
+	}, zctl.replaced[0])
+	assert.Len(t, zctl.deleted, 1)
+	assert.Equal(t, fakeRRSetDeleteCall{
+		zoneName: "example.com.",
+		name:     "old.example.com.",
+		typ:      "TXT",
+	}, zctl.deleted[0])
+}
+
+func TestPDNSUnauthorized(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost", nil)
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.JSONEq(t, `{"error":"unauthorized"}`, rec.Body.String())
+}
+
+func TestPDNSUnsupportedZoneOperation(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/servers/localhost/zones", nil)
+	req.Header.Set("X-API-Key", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotImplemented, rec.Code)
+	assert.JSONEq(t, `{"error":"create zone is not implemented"}`, rec.Body.String())
 }
