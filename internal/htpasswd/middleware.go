@@ -36,3 +36,30 @@ func NewBasicAuthMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+func NewAPIKeyMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, password, ok := r.BasicAuth()
+			if ok {
+				ok, _ = ht.Authenticate(user, password)
+			} else {
+				password = r.Header.Get("X-API-Key")
+				ok = password != "" && ht.AuthenticateAny(password)
+			}
+
+			if ok {
+				h.ServeHTTP(w, r)
+				return
+			}
+
+			err := fuego.HTTPError{
+				Title:  "unauthorized access",
+				Detail: "wrong api key",
+				Status: http.StatusUnauthorized,
+			}
+
+			fuego.SendJSONError(w, nil, err)
+		})
+	}
+}

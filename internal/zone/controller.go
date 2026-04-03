@@ -34,10 +34,18 @@ const EmptyPlaceholder = "placeholder"
 
 // Controller implements zone file modification methods
 type Controller interface {
+	// ListZones returns all managed zones.
+	ListZones(ctx context.Context) ([]ZoneSnapshot, error)
+	// GetZone returns a managed zone by its origin name.
+	GetZone(ctx context.Context, zoneName string) (ZoneSnapshot, error)
 	// UpdateDDNSAddress changes DDNS A/AAAA records
 	UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error
 	// UpdateACMEChallenge changes ACME TXT record for DNS-01 challenge
 	UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error
+	// ReplaceRRSet replaces or creates the requested RRSet in a specific zone.
+	ReplaceRRSet(ctx context.Context, zoneName, name, typ string, ttl int, values []string) (changed bool, err error)
+	// DeleteRRSet removes the requested RRSet from a specific zone.
+	DeleteRRSet(ctx context.Context, zoneName, name, typ string) (changed bool, err error)
 	// ZMUpdateRecord replace record values
 	ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error)
 }
