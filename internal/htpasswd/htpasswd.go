@@ -12,7 +12,6 @@ import (
 
 type HTPasswd interface {
 	Authenticate(user, password string) (ok, present bool)
-	AuthenticateAny(password string) (ok bool)
 }
 
 type HTPasswdFile map[string]string
@@ -53,15 +52,4 @@ func (s HTPasswdFile) Authenticate(user, password string) (ok bool, present bool
 	}
 
 	return
-}
-
-func (s HTPasswdFile) AuthenticateAny(password string) bool {
-	for user := range s {
-		ok, present := s.Authenticate(user, password)
-		if ok && present {
-			return true
-		}
-	}
-
-	return false
 }
