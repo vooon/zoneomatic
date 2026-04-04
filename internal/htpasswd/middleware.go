@@ -1,7 +1,9 @@
 package htpasswd
 
 import (
+	"encoding/base64"
 	"net/http"
+	"strings"
 
 	"github.com/go-fuego/fuego"
 )
@@ -38,14 +40,25 @@ func NewBasicAuthMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
 }
 
 func NewAPIKeyMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
+	return NewAPIKeyMiddlewareWithUnauthorized(ht, func(w http.ResponseWriter, _ *http.Request) {
+		err := fuego.HTTPError{
+			Title:  "unauthorized access",
+			Detail: "wrong api key",
+			Status: http.StatusUnauthorized,
+		}
+
+		fuego.SendJSONError(w, nil, err)
+	})
+}
+
+func NewAPIKeyMiddlewareWithUnauthorized(ht HTPasswd, onUnauthorized func(http.ResponseWriter, *http.Request)) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, password, ok := r.BasicAuth()
 			if ok {
 				ok, _ = ht.Authenticate(user, password)
 			} else {
-				password = r.Header.Get("X-API-Key")
-				ok = password != "" && ht.AuthenticateAny(password)
+				ok = AuthenticateAPIKeyHeader(ht, r.Header.Get("X-API-Key"))
 			}
 
 			if ok {
@@ -53,13 +66,27 @@ func NewAPIKeyMiddleware(ht HTPasswd) func(http.Handler) http.Handler {
 				return
 			}
 
-			err := fuego.HTTPError{
-				Title:  "unauthorized access",
-				Detail: "wrong api key",
-				Status: http.StatusUnauthorized,
-			}
-
-			fuego.SendJSONError(w, nil, err)
+			onUnauthorized(w, r)
 		})
 	}
+}
+
+func AuthenticateAPIKeyHeader(ht HTPasswd, headerValue string) bool {
+	headerValue = strings.TrimSpace(headerValue)
+	if headerValue == "" {
+		return false
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(headerValue)
+	if err != nil {
+		return false
+	}
+
+	user, password, ok := strings.Cut(string(decoded), ":")
+	if !ok || user == "" {
+		return false
+	}
+
+	ok, _ = ht.Authenticate(user, password)
+	return ok
 }

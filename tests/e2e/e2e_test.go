@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -255,7 +256,7 @@ func httpDo(t *testing.T, client *http.Client, method, url string, body io.Reade
 
 	req, err := http.NewRequest(method, url, body)
 	require.NoError(t, err)
-	req.Header.Set("X-API-Key", e2eAPIKey)
+	req.Header.Set("X-API-Key", pdnsAPIKey("e2e", e2eAPIKey))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -295,4 +296,8 @@ func findRRSet(t *testing.T, rrsets []pdnsRRSet, name, typ string) pdnsRRSet {
 
 	t.Fatalf("rrset not found: %s %s", name, typ)
 	return pdnsRRSet{}
+}
+
+func pdnsAPIKey(user, password string) string {
+	return base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
 }

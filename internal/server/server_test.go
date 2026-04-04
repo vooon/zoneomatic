@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -28,10 +29,6 @@ func (f fakeHTPasswd) Authenticate(user, password string) (ok, present bool) {
 		return false, false
 	}
 	return password == f.pass, true
-}
-
-func (f fakeHTPasswd) AuthenticateAny(password string) bool {
-	return password == f.pass
 }
 
 type fakeRRSetReplaceCall struct {
@@ -252,7 +249,7 @@ func TestPDNSServerDiscovery(t *testing.T) {
 	srv := newTestServer(htp, zctl)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost", nil)
-	req.Header.Set("X-API-Key", "p")
+	req.Header.Set("X-API-Key", testPDNSAPIKey("u", "p"))
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 
@@ -284,7 +281,7 @@ func TestPDNSZoneGet(t *testing.T) {
 	srv := newTestServer(htp, zctl)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost/zones/example.com.?rrsets=false", nil)
-	req.Header.Set("X-API-Key", "p")
+	req.Header.Set("X-API-Key", testPDNSAPIKey("u", "p"))
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 
@@ -297,7 +294,7 @@ func TestPDNSZoneGet(t *testing.T) {
 	assert.False(t, hasRRsets)
 
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/servers/localhost/zones/example.com.", nil)
-	req.Header.Set("X-API-Key", "p")
+	req.Header.Set("X-API-Key", testPDNSAPIKey("u", "p"))
 	rec = httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 
@@ -315,7 +312,7 @@ func TestPDNSPatchZoneReplaceAndDelete(t *testing.T) {
 
 	patchBody := `{"rrsets":[{"name":"www.example.com.","type":"A","ttl":60,"changetype":"REPLACE","records":[{"content":"1.2.3.4","disabled":false}]},{"name":"old.example.com.","type":"TXT","changetype":"DELETE","records":[]}]}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/servers/localhost/zones/example.com.", strings.NewReader(patchBody))
-	req.Header.Set("X-API-Key", "p")
+	req.Header.Set("X-API-Key", testPDNSAPIKey("u", "p"))
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 
@@ -355,10 +352,14 @@ func TestPDNSUnsupportedZoneOperation(t *testing.T) {
 	srv := newTestServer(htp, zctl)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/servers/localhost/zones", nil)
-	req.Header.Set("X-API-Key", "p")
+	req.Header.Set("X-API-Key", testPDNSAPIKey("u", "p"))
 	rec := httptest.NewRecorder()
 	srv.Mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotImplemented, rec.Code)
 	assert.JSONEq(t, `{"error":"create zone is not implemented"}`, rec.Body.String())
+}
+
+func testPDNSAPIKey(user, password string) string {
+	return base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -17,10 +18,15 @@ import (
 
 const pdnsServerID = "localhost"
 
-type pdnsErrorResponse struct {
-	Error  string   `json:"error"`
-	Errors []string `json:"errors,omitempty"`
+type pdnsHTTPError struct {
+	status  int
+	Message string   `json:"error"`
+	Errors  []string `json:"errors,omitempty"`
 }
+
+func (e pdnsHTTPError) Error() string { return e.Message }
+
+func (e pdnsHTTPError) StatusCode() int { return e.status }
 
 type pdnsServer struct {
 	Type       string `json:"type"`
@@ -77,7 +83,9 @@ type pdnsPatchZoneRequest struct {
 }
 
 func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Controller) {
-	pdnsAuth := newPDNSAPIKeyMiddleware(htp)
+	pdnsAuth := htpasswd.NewAPIKeyMiddlewareWithUnauthorized(htp, func(w http.ResponseWriter, r *http.Request) {
+		sendPDNSError(w, r, http.StatusUnauthorized, "unauthorized")
+	})
 	pdnsSecurity := option.Security(openapi3.SecurityRequirement{
 		"pdnsApiKeyAuth": []string{},
 	})
@@ -85,7 +93,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 	fuego.GetStd(srv, "/api/v1/servers",
 		func(w http.ResponseWriter, r *http.Request) {
 			server := pdnsServerInfo()
-			sendPDNSJSON(w, http.StatusOK, []pdnsServer{server})
+			sendPDNSJSON(w, r, http.StatusOK, []pdnsServer{server})
 		},
 		option.Summary("pdns list servers"),
 		option.Description("List the forged PowerDNS-compatible server instance"),
@@ -99,7 +107,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 				return
 			}
 
-			sendPDNSJSON(w, http.StatusOK, pdnsServerInfo())
+			sendPDNSJSON(w, r, http.StatusOK, pdnsServerInfo())
 		},
 		option.Summary("pdns get server"),
 		option.Description("Return the forged PowerDNS-compatible server instance"),
@@ -115,7 +123,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			zones, err := zctl.ListZones(r.Context())
 			if err != nil {
-				sendPDNSError(w, http.StatusInternalServerError, err.Error())
+				sendPDNSError(w, r, http.StatusInternalServerError, err.Error())
 				return
 			}
 
@@ -129,7 +137,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 				result = append(result, zoneSnapshotToPDNSZone(zoneData, false))
 			}
 
-			sendPDNSJSON(w, http.StatusOK, result)
+			sendPDNSJSON(w, r, http.StatusOK, result)
 		},
 		option.Summary("pdns list zones"),
 		option.Description("List managed zones in a PowerDNS-compatible format"),
@@ -145,7 +153,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			zoneData, err := zctl.GetZone(r.Context(), r.PathValue("zone_id"))
 			if err != nil {
-				sendPDNSZoneError(w, err)
+				sendPDNSZoneError(w, r, err)
 				return
 			}
 
@@ -153,7 +161,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 			rrsetName := r.URL.Query().Get("rrset_name")
 			rrsetType := r.URL.Query().Get("rrset_type")
 			if rrsetType != "" && rrsetName == "" {
-				sendPDNSError(w, http.StatusUnprocessableEntity, "rrset_type requires rrset_name")
+				sendPDNSError(w, r, http.StatusUnprocessableEntity, "rrset_type requires rrset_name")
 				return
 			}
 
@@ -162,7 +170,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 				zoneResp.RRsets = filterPDNSRRsets(zoneResp.RRsets, rrsetName, rrsetType)
 			}
 
-			sendPDNSJSON(w, http.StatusOK, zoneResp)
+			sendPDNSJSON(w, r, http.StatusOK, zoneResp)
 		},
 		option.Summary("pdns get zone"),
 		option.Description("Return a managed zone in PowerDNS-compatible format"),
@@ -180,27 +188,27 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			var req pdnsPatchZoneRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				sendPDNSError(w, http.StatusBadRequest, "invalid json body", err.Error())
+				sendPDNSError(w, r, http.StatusBadRequest, "invalid json body", err.Error())
 				return
 			}
 
 			zoneName := r.PathValue("zone_id")
 			for _, rrset := range req.RRsets {
 				if rrset.Name == "" || rrset.Type == "" {
-					sendPDNSError(w, http.StatusUnprocessableEntity, "rrset name and type are required")
+					sendPDNSError(w, r, http.StatusUnprocessableEntity, "rrset name and type are required")
 					return
 				}
 
 				switch strings.ToUpper(strings.TrimSpace(rrset.ChangeType)) {
 				case "DELETE":
 					if _, err := zctl.DeleteRRSet(r.Context(), zoneName, rrset.Name, rrset.Type); err != nil {
-						sendPDNSZoneError(w, err)
+						sendPDNSZoneError(w, r, err)
 						return
 					}
 				case "REPLACE":
 					if len(rrset.Records) == 0 {
 						if _, err := zctl.DeleteRRSet(r.Context(), zoneName, rrset.Name, rrset.Type); err != nil {
-							sendPDNSZoneError(w, err)
+							sendPDNSZoneError(w, r, err)
 							return
 						}
 
@@ -208,14 +216,14 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 					}
 
 					if rrset.TTL <= 0 {
-						sendPDNSError(w, http.StatusUnprocessableEntity, "ttl must be greater than zero for REPLACE")
+						sendPDNSError(w, r, http.StatusUnprocessableEntity, "ttl must be greater than zero for REPLACE")
 						return
 					}
 
 					values := make([]string, 0, len(rrset.Records))
 					for _, record := range rrset.Records {
 						if record.Disabled {
-							sendPDNSError(w, http.StatusNotImplemented, "disabled records are not supported")
+							sendPDNSError(w, r, http.StatusNotImplemented, "disabled records are not supported")
 							return
 						}
 
@@ -223,11 +231,11 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 					}
 
 					if _, err := zctl.ReplaceRRSet(r.Context(), zoneName, rrset.Name, rrset.Type, rrset.TTL, values); err != nil {
-						sendPDNSZoneError(w, err)
+						sendPDNSZoneError(w, r, err)
 						return
 					}
 				default:
-					sendPDNSError(w, http.StatusNotImplemented, "unsupported changetype: "+rrset.ChangeType)
+					sendPDNSError(w, r, http.StatusNotImplemented, "unsupported changetype: "+rrset.ChangeType)
 					return
 				}
 			}
@@ -254,7 +262,7 @@ func registerPDNSUnsupportedZoneRoute(srv *fuego.Server, authMw func(http.Handle
 		}
 
 		slog.WarnContext(r.Context(), "Unsupported PDNS operation", "operation", operation, "path", r.URL.Path)
-		sendPDNSError(w, http.StatusNotImplemented, operation+" is not implemented")
+		sendPDNSError(w, r, http.StatusNotImplemented, operation+" is not implemented")
 	}
 
 	switch method {
@@ -347,34 +355,66 @@ func requirePDNSServerID(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 
-	sendPDNSError(w, http.StatusNotFound, "server not found")
+	sendPDNSError(w, r, http.StatusNotFound, "server not found")
 	return false
 }
 
-func sendPDNSZoneError(w http.ResponseWriter, err error) {
+func sendPDNSZoneError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, zone.ErrZoneNotFound):
-		sendPDNSError(w, http.StatusNotFound, err.Error())
+		sendPDNSError(w, r, http.StatusNotFound, err.Error())
 	case errors.Is(err, zone.ErrRecordNotFound):
-		sendPDNSError(w, http.StatusNotFound, err.Error())
+		sendPDNSError(w, r, http.StatusNotFound, err.Error())
 	default:
-		sendPDNSError(w, http.StatusUnprocessableEntity, err.Error())
+		sendPDNSError(w, r, http.StatusUnprocessableEntity, err.Error())
 	}
 }
 
-func sendPDNSError(w http.ResponseWriter, status int, msg string, errs ...string) {
-	sendPDNSJSON(w, status, pdnsErrorResponse{Error: msg, Errors: errs})
+func sendPDNSError(w http.ResponseWriter, r *http.Request, status int, msg string, errs ...string) {
+	fuego.SendJSONError(w, r, pdnsHTTPError{status: status, Message: msg, Errors: errs})
 }
 
-func sendPDNSJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
+func sendPDNSJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
 	if body == nil || status == http.StatusNoContent {
+		w.WriteHeader(status)
 		return
 	}
 
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		slog.Error("Failed to encode PDNS response", "error", err)
+	bw := &pdnsBufferedWriter{header: make(http.Header), status: status}
+	bw.WriteHeader(status)
+	if err := fuego.SendJSON(bw, r, body); err != nil {
+		fuego.SendJSONError(w, r, pdnsHTTPError{
+			status:  http.StatusInternalServerError,
+			Message: "failed to encode response",
+			Errors:  []string{err.Error()},
+		})
+		return
+	}
+
+	copyHeader(w.Header(), bw.Header())
+	w.WriteHeader(bw.status)
+	if _, err := w.Write(bw.body.Bytes()); err != nil {
+		slog.ErrorContext(r.Context(), "Failed to write PDNS response", "error", err)
+	}
+}
+
+type pdnsBufferedWriter struct {
+	header http.Header
+	status int
+	body   bytes.Buffer
+}
+
+func (w *pdnsBufferedWriter) Header() http.Header { return w.header }
+
+func (w *pdnsBufferedWriter) WriteHeader(status int) { w.status = status }
+
+func (w *pdnsBufferedWriter) Write(p []byte) (int, error) { return w.body.Write(p) }
+
+func copyHeader(dst, src http.Header) {
+	for key, values := range src {
+		for _, value := range values {
+			dst.Add(key, value)
+		}
 	}
 }
 
@@ -384,25 +424,4 @@ func dnsFQDN(name string) string {
 	}
 
 	return strings.TrimSpace(strings.TrimSuffix(name, ".")) + "."
-}
-
-func newPDNSAPIKeyMiddleware(ht htpasswd.HTPasswd) func(http.Handler) http.Handler {
-	return func(h http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, password, ok := r.BasicAuth()
-			if ok {
-				ok, _ = ht.Authenticate(user, password)
-			} else {
-				password = r.Header.Get("X-API-Key")
-				ok = password != "" && ht.AuthenticateAny(password)
-			}
-
-			if ok {
-				h.ServeHTTP(w, r)
-				return
-			}
-
-			sendPDNSError(w, http.StatusUnauthorized, "unauthorized")
-		})
-	}
 }
