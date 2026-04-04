@@ -392,8 +392,8 @@ func TestOpenAPISpecFormattingAndDescription(t *testing.T) {
 	assert.NoError(t, err)
 	srv.OpenAPI.Config.JSONFilePath = filepath.Join(t.TempDir(), "openapi.json")
 	RegisterEndpoints(srv, htp, zctl)
-	srv.Engine.RegisterOpenAPIRoutes(srv)
-	srv.Engine.OutputOpenAPISpec()
+	srv.RegisterOpenAPIRoutes(srv)
+	srv.OutputOpenAPISpec()
 
 	jsonBytes, err := os.ReadFile(srv.OpenAPI.Config.JSONFilePath)
 	assert.NoError(t, err)
