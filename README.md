@@ -16,6 +16,7 @@ It also supports [LEGO HTTP-Request][legohttp] protocol for the same challenge.
 
 You can use OpenWRT package from my feed: [vooon/my-openwrt-feed][owrtpkg].
 
+
 Quick start
 -----------
 
@@ -70,6 +71,43 @@ Flags:
 > [!NOTE]
 > API description also available in OpenAPI 3 format on `/swagger`,
 > e.g. http://localhost:9999/swagger
+
+
+PowerDNS-Compatible API
+-----------------------
+
+Zone-o-matic exposes a PowerDNS-compatible API subset under `/api/v1`.
+It is intended for clients that only need server discovery plus read/update access to existing zones,
+such as Proxmox SDN.
+
+Authentication:
+
+- `X-API-Key` must contain base64-encoded `user:password`, using credentials from the htpasswd file.
+- Regular HTTP Basic Auth with the same credentials is also accepted.
+- The only server id is `localhost`.
+
+Implemented operations:
+
+- `GET /api/v1/servers`
+- `GET /api/v1/servers/localhost`
+- `GET /api/v1/servers/localhost/zones`
+- `GET /api/v1/servers/localhost/zones/{zone_id}`
+- `PATCH /api/v1/servers/localhost/zones/{zone_id}`
+
+Notes:
+
+- `PATCH` supports RRSet `REPLACE` and `DELETE` changes.
+- Zone operations work on already configured zone files only; creating new zones through the API is not supported.
+- Unsupported PowerDNS-compatible endpoints currently return `501 Not Implemented`.
+- Other PowerDNS API areas such as config, metadata, export, search, and AXFR retrieval are not implemented.
+
+`X-API-Key` example:
+
+```bash
+curl \
+  -H "X-API-Key: $(printf 'user:password' | base64 -w0)" \
+  "http://127.0.0.1:9999/api/v1/servers"
+```
 
 
 GET /myip
