@@ -90,10 +90,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		"pdnsApiKeyAuth": []string{},
 	})
 
-	fuego.GetStd(srv, "/api/v1/servers",
-		func(w http.ResponseWriter, r *http.Request) {
-			server := pdnsServerInfo()
-			sendPDNSJSON(w, r, http.StatusOK, []pdnsServer{server})
+	fuego.Get(srv, "/api/v1/servers",
+		func(ctx fuego.ContextNoBody) ([]pdnsServer, error) {
+			return []pdnsServer{pdnsServerInfo()}, nil
 		},
 		option.Summary("pdns list servers"),
 		option.Description("List the forged PowerDNS-compatible server instance"),
@@ -101,13 +100,14 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		pdnsSecurity,
 	)
 
-	fuego.GetStd(srv, "/api/v1/servers/{server_id}",
-		func(w http.ResponseWriter, r *http.Request) {
-			if !requirePDNSServerID(w, r) {
-				return
+	fuego.Get(srv, "/api/v1/servers/{server_id}",
+		func(ctx fuego.ContextNoBody) (pdnsServer, error) {
+			serverID := ctx.PathParam("server_id")
+			if serverID != pdnsServerID {
+				return pdnsServer{}, newPDNSError(http.StatusNotFound, "server not found")
 			}
 
-			sendPDNSJSON(w, r, http.StatusOK, pdnsServerInfo())
+			return pdnsServerInfo(), nil
 		},
 		option.Summary("pdns get server"),
 		option.Description("Return the forged PowerDNS-compatible server instance"),
@@ -115,19 +115,19 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		pdnsSecurity,
 	)
 
-	fuego.GetStd(srv, "/api/v1/servers/{server_id}/zones",
-		func(w http.ResponseWriter, r *http.Request) {
-			if !requirePDNSServerID(w, r) {
-				return
+	fuego.Get(srv, "/api/v1/servers/{server_id}/zones",
+		func(ctx fuego.ContextNoBody) ([]pdnsZone, error) {
+			serverID := ctx.PathParam("server_id")
+			if serverID != pdnsServerID {
+				return nil, newPDNSError(http.StatusNotFound, "server not found")
 			}
 
-			zones, err := zctl.ListZones(r.Context())
+			zones, err := zctl.ListZones(ctx)
 			if err != nil {
-				sendPDNSError(w, r, http.StatusInternalServerError, err.Error())
-				return
+				return nil, newPDNSError(http.StatusInternalServerError, err.Error())
 			}
 
-			zoneFilter := r.URL.Query().Get("zone")
+			zoneFilter := ctx.QueryParam("zone")
 			result := make([]pdnsZone, 0, len(zones))
 			for _, zoneData := range zones {
 				if zoneFilter != "" && zoneData.Name != dnsFQDN(zoneFilter) {
@@ -137,32 +137,39 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 				result = append(result, zoneSnapshotToPDNSZone(zoneData, false))
 			}
 
-			sendPDNSJSON(w, r, http.StatusOK, result)
+			return result, nil
 		},
 		option.Summary("pdns list zones"),
 		option.Description("List managed zones in a PowerDNS-compatible format"),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
+		option.Query("zone", "Filter zones by fully-qualified zone name"),
 	)
 
-	fuego.GetStd(srv, "/api/v1/servers/{server_id}/zones/{zone_id}",
-		func(w http.ResponseWriter, r *http.Request) {
-			if !requirePDNSServerID(w, r) {
-				return
+	fuego.Get(srv, "/api/v1/servers/{server_id}/zones/{zone_id}",
+		func(ctx fuego.ContextNoBody) (*pdnsZone, error) {
+			serverID := ctx.PathParam("server_id")
+			if serverID != pdnsServerID {
+				return nil, newPDNSError(http.StatusNotFound, "server not found")
 			}
 
-			zoneData, err := zctl.GetZone(r.Context(), r.PathValue("zone_id"))
+			zoneData, err := zctl.GetZone(ctx, ctx.PathParam("zone_id"))
 			if err != nil {
-				sendPDNSZoneError(w, r, err)
-				return
+				switch {
+				case errors.Is(err, zone.ErrZoneNotFound):
+					return nil, newPDNSError(http.StatusNotFound, err.Error())
+				case errors.Is(err, zone.ErrRecordNotFound):
+					return nil, newPDNSError(http.StatusNotFound, err.Error())
+				default:
+					return nil, newPDNSError(http.StatusUnprocessableEntity, err.Error())
+				}
 			}
 
-			includeRRsets := !strings.EqualFold(r.URL.Query().Get("rrsets"), "false")
-			rrsetName := r.URL.Query().Get("rrset_name")
-			rrsetType := r.URL.Query().Get("rrset_type")
+			includeRRsets := !strings.EqualFold(ctx.QueryParam("rrsets"), "false")
+			rrsetName := ctx.QueryParam("rrset_name")
+			rrsetType := ctx.QueryParam("rrset_type")
 			if rrsetType != "" && rrsetName == "" {
-				sendPDNSError(w, r, http.StatusUnprocessableEntity, "rrset_type requires rrset_name")
-				return
+				return nil, newPDNSError(http.StatusUnprocessableEntity, "rrset_type requires rrset_name")
 			}
 
 			zoneResp := zoneSnapshotToPDNSZone(zoneData, includeRRsets)
@@ -170,12 +177,15 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 				zoneResp.RRsets = filterPDNSRRsets(zoneResp.RRsets, rrsetName, rrsetType)
 			}
 
-			sendPDNSJSON(w, r, http.StatusOK, zoneResp)
+			return &zoneResp, nil
 		},
 		option.Summary("pdns get zone"),
 		option.Description("Return a managed zone in PowerDNS-compatible format"),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
+		option.QueryBool("rrsets", "Include rrsets in the zone response. Defaults to true."),
+		option.Query("rrset_name", "Filter returned rrsets by fully-qualified record name"),
+		option.Query("rrset_type", "Filter returned rrsets by record type; requires rrset_name"),
 	)
 
 	fuego.PatchStd(srv, "/api/v1/servers/{server_id}/zones/{zone_id}",
@@ -371,7 +381,7 @@ func sendPDNSZoneError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func sendPDNSError(w http.ResponseWriter, r *http.Request, status int, msg string, errs ...string) {
-	fuego.SendJSONError(w, r, pdnsHTTPError{status: status, Message: msg, Errors: errs})
+	fuego.SendJSONError(w, r, newPDNSError(status, msg, errs...))
 }
 
 func sendPDNSJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
@@ -416,6 +426,10 @@ func copyHeader(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func newPDNSError(status int, msg string, errs ...string) pdnsHTTPError {
+	return pdnsHTTPError{status: status, Message: msg, Errors: errs}
 }
 
 func dnsFQDN(name string) string {
