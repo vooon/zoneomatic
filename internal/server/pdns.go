@@ -93,8 +93,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		func(ctx fuego.ContextNoBody) ([]pdnsServer, error) {
 			return []pdnsServer{pdnsServerInfo()}, nil
 		},
+		option.OperationID("pdnsListServers"),
 		option.Summary("pdns list servers"),
-		option.Description("List the forged PowerDNS-compatible server instance"),
+		option.OverrideDescription("List the forged PowerDNS-compatible server instance."),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
 	)
@@ -108,8 +109,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			return pdnsServerInfo(), nil
 		},
+		option.OperationID("pdnsGetServer"),
 		option.Summary("pdns get server"),
-		option.Description("Return the forged PowerDNS-compatible server instance"),
+		option.OverrideDescription("Return the forged PowerDNS-compatible server instance."),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
 	)
@@ -138,8 +140,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			return result, nil
 		},
+		option.OperationID("pdnsListZones"),
 		option.Summary("pdns list zones"),
-		option.Description("List managed zones in a PowerDNS-compatible format"),
+		option.OverrideDescription("List managed zones in a PowerDNS-compatible format."),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
 		option.Query("zone", "Filter zones by fully-qualified zone name"),
@@ -178,8 +181,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			return &zoneResp, nil
 		},
+		option.OperationID("pdnsGetZone"),
 		option.Summary("pdns get zone"),
-		option.Description("Return a managed zone in PowerDNS-compatible format"),
+		option.OverrideDescription("Return a managed zone in PowerDNS-compatible format."),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
 		option.QueryBool("rrsets", "Include rrsets in the zone response. Defaults to true."),
@@ -251,8 +255,9 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 
 			w.WriteHeader(http.StatusNoContent)
 		},
+		option.OperationID("pdnsPatchZone"),
 		option.Summary("pdns patch zone"),
-		option.Description("Replace or delete managed RRSets in PowerDNS-compatible format"),
+		option.OverrideDescription("Replace or delete managed RRSets in PowerDNS-compatible format."),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
 		option.RequestBody(
@@ -281,14 +286,14 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		),
 	)
 
-	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones", http.MethodPost, "create zone")
-	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}", http.MethodPut, "update zone")
-	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}", http.MethodDelete, "delete zone")
-	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}/notify", http.MethodPut, "notify zone")
-	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}/rectify", http.MethodPut, "rectify zone")
+	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones", http.MethodPost, "create zone", "pdnsCreateZone")
+	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}", http.MethodPut, "update zone", "pdnsUpdateZone")
+	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}", http.MethodDelete, "delete zone", "pdnsDeleteZone")
+	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}/notify", http.MethodPut, "notify zone", "pdnsNotifyZone")
+	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones/{zone_id}/rectify", http.MethodPut, "rectify zone", "pdnsRectifyZone")
 }
 
-func registerPDNSUnsupportedZoneRoute(srv *fuego.Server, authMw func(http.Handler) http.Handler, path, method, operation string) {
+func registerPDNSUnsupportedZoneRoute(srv *fuego.Server, authMw func(http.Handler) http.Handler, path, method, operation, operationID string) {
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		if !requirePDNSServerID(w, r) {
 			return
@@ -298,13 +303,33 @@ func registerPDNSUnsupportedZoneRoute(srv *fuego.Server, authMw func(http.Handle
 		sendPDNSError(w, r, http.StatusNotImplemented, operation+" is not implemented")
 	}
 
+	description := operation + " is not implemented for existing-file managed zones."
+
 	switch method {
 	case http.MethodPost:
-		fuego.PostStd(srv, path, handler, option.Middleware(authMw), option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}))
+		fuego.PostStd(srv, path, handler,
+			option.OperationID(operationID),
+			option.Summary("pdns "+operation),
+			option.OverrideDescription(description),
+			option.Middleware(authMw),
+			option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}),
+		)
 	case http.MethodPut:
-		fuego.PutStd(srv, path, handler, option.Middleware(authMw), option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}))
+		fuego.PutStd(srv, path, handler,
+			option.OperationID(operationID),
+			option.Summary("pdns "+operation),
+			option.OverrideDescription(description),
+			option.Middleware(authMw),
+			option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}),
+		)
 	case http.MethodDelete:
-		fuego.DeleteStd(srv, path, handler, option.Middleware(authMw), option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}))
+		fuego.DeleteStd(srv, path, handler,
+			option.OperationID(operationID),
+			option.Summary("pdns "+operation),
+			option.OverrideDescription(description),
+			option.Middleware(authMw),
+			option.Security(openapi3.SecurityRequirement{"pdnsApiKeyAuth": []string{}}),
+		)
 	}
 }
 

@@ -67,6 +67,20 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	srv := fuego.NewServer(
 		fuego.WithListener(listener),
+		fuego.WithEngineOptions(
+			fuego.WithOpenAPIConfig(fuego.OpenAPIConfig{
+				JSONFilePath:     "doc/openapi.json",
+				PrettyFormatJSON: true,
+				SpecURL:          "/swagger/openapi.json",
+				SwaggerURL:       "/swagger",
+				UIHandler:        fuego.DefaultOpenAPIHandler,
+				Info: &openapi3.Info{
+					Title:       "Zoneomatic API",
+					Description: "HTTP API for zoneomatic DNS updates and PowerDNS-compatible zone management.",
+					Version:     "0.0.1",
+				},
+			}),
+		),
 		fuego.WithSecurity(
 			map[string]*openapi3.SecuritySchemeRef{
 				"basicAuth": {

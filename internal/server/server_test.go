@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -358,6 +360,56 @@ func TestPDNSUnsupportedZoneOperation(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotImplemented, rec.Code)
 	assert.JSONEq(t, `{"error":"create zone is not implemented"}`, rec.Body.String())
+}
+
+func TestPDNSOpenAPIHasStableMetadata(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv := newTestServer(htp, zctl)
+	spec := srv.OpenAPI.Description()
+
+	listServers := spec.Paths.Find("/api/v1/servers").Get
+	assert.Equal(t, "pdnsListServers", listServers.OperationID)
+	assert.NotContains(t, listServers.Description, "func1")
+
+	getZone := spec.Paths.Find("/api/v1/servers/{server_id}/zones/{zone_id}").Get
+	assert.Equal(t, "pdnsGetZone", getZone.OperationID)
+	assert.NotContains(t, getZone.Description, "func1")
+
+	patchZone := spec.Paths.Find("/api/v1/servers/{server_id}/zones/{zone_id}").Patch
+	assert.Equal(t, "pdnsPatchZone", patchZone.OperationID)
+	assert.NotContains(t, patchZone.Description, "func1")
+
+	createZone := spec.Paths.Find("/api/v1/servers/{server_id}/zones").Post
+	assert.Equal(t, "pdnsCreateZone", createZone.OperationID)
+	assert.NotContains(t, createZone.Description, "func1")
+}
+
+func TestOpenAPISpecFormattingAndDescription(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{}
+	srv, _, err := NewServer(&Cli{Listen: "127.0.0.1:0"})
+	assert.NoError(t, err)
+	srv.OpenAPI.Config.JSONFilePath = filepath.Join(t.TempDir(), "openapi.json")
+	RegisterEndpoints(srv, htp, zctl)
+	srv.Engine.RegisterOpenAPIRoutes(srv)
+	srv.Engine.OutputOpenAPISpec()
+
+	jsonBytes, err := os.ReadFile(srv.OpenAPI.Config.JSONFilePath)
+	assert.NoError(t, err)
+	assert.Contains(t, string(jsonBytes), "\n\t\"openapi\"")
+	assert.NotContains(t, string(jsonBytes), "Fuego Cheatsheet")
+	assert.Contains(t, string(jsonBytes), "Zoneomatic API")
+
+	yamlReq := httptest.NewRequest(http.MethodGet, "/swagger/openapi.json", nil)
+	yamlReq.Header.Set("Accept", "application/x-yaml")
+	yamlRec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(yamlRec, yamlReq)
+
+	assert.Equal(t, http.StatusOK, yamlRec.Code)
+	assert.Equal(t, "application/x-yaml", yamlRec.Header().Get("Content-Type"))
+	assert.Contains(t, yamlRec.Body.String(), "title: Zoneomatic API")
+	assert.NotContains(t, yamlRec.Body.String(), "Fuego Cheatsheet")
 }
 
 func testPDNSAPIKey(user, password string) string {
