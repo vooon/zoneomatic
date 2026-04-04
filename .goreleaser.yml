@@ -53,6 +53,7 @@ dockers_v2:
       - "{{ .Tag }}"
       - "{{ .Version }}"
       - "{{ .Major }}.{{ .Minor }}"
+      - "latest"
       - "sha-{{ .ShortCommit }}"
     labels:
       org.opencontainers.image.description: "Zone-o-matic DNS API Server"
