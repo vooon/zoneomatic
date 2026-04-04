@@ -81,6 +81,8 @@ type pdnsPatchZoneRequest struct {
 	RRsets []pdnsRRSet `json:"rrsets"`
 }
 
+type pdnsNoContentResponse struct{}
+
 func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Controller) {
 	pdnsAuth := htpasswd.NewAPIKeyMiddlewareWithUnauthorized(htp, func(w http.ResponseWriter, r *http.Request) {
 		sendPDNSError(w, r, http.StatusUnauthorized, "unauthorized")
@@ -267,7 +269,7 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 			},
 		),
 		option.AddResponse(http.StatusNoContent, "RRSets updated",
-			fuego.Response{Type: struct{}{}},
+			fuego.Response{Type: pdnsNoContentResponse{}},
 		),
 		option.AddResponse(http.StatusBadRequest, "Invalid request body",
 			fuego.Response{Type: new(pdnsHTTPError)},
