@@ -256,6 +256,30 @@ func registerPDNSEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.C
 		option.Description("Replace or delete managed RRSets in PowerDNS-compatible format"),
 		option.Middleware(pdnsAuth),
 		pdnsSecurity,
+		option.RequestBody(
+			fuego.RequestBody{
+				Type:         new(pdnsPatchZoneRequest),
+				ContentTypes: []string{"application/json"},
+			},
+		),
+		option.AddResponse(http.StatusNoContent, "RRSets updated",
+			fuego.Response{Type: struct{}{}},
+		),
+		option.AddResponse(http.StatusBadRequest, "Invalid request body",
+			fuego.Response{Type: new(pdnsHTTPError)},
+		),
+		option.AddResponse(http.StatusUnauthorized, "Unauthorized",
+			fuego.Response{Type: new(pdnsHTTPError)},
+		),
+		option.AddResponse(http.StatusNotFound, "Zone or server not found",
+			fuego.Response{Type: new(pdnsHTTPError)},
+		),
+		option.AddResponse(http.StatusUnprocessableEntity, "Invalid rrset request",
+			fuego.Response{Type: new(pdnsHTTPError)},
+		),
+		option.AddResponse(http.StatusNotImplemented, "Unsupported patch request",
+			fuego.Response{Type: new(pdnsHTTPError)},
+		),
 	)
 
 	registerPDNSUnsupportedZoneRoute(srv, pdnsAuth, "/api/v1/servers/{server_id}/zones", http.MethodPost, "create zone")
