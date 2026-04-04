@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -406,50 +405,6 @@ func sendPDNSZoneError(w http.ResponseWriter, r *http.Request, err error) {
 
 func sendPDNSError(w http.ResponseWriter, r *http.Request, status int, msg string, errs ...string) {
 	fuego.SendJSONError(w, r, newPDNSError(status, msg, errs...))
-}
-
-func sendPDNSJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
-	if body == nil || status == http.StatusNoContent {
-		w.WriteHeader(status)
-		return
-	}
-
-	bw := &pdnsBufferedWriter{header: make(http.Header), status: status}
-	bw.WriteHeader(status)
-	if err := fuego.SendJSON(bw, r, body); err != nil {
-		fuego.SendJSONError(w, r, pdnsHTTPError{
-			status:  http.StatusInternalServerError,
-			Message: "failed to encode response",
-			Errors:  []string{err.Error()},
-		})
-		return
-	}
-
-	copyHeader(w.Header(), bw.Header())
-	w.WriteHeader(bw.status)
-	if _, err := w.Write(bw.body.Bytes()); err != nil {
-		slog.ErrorContext(r.Context(), "Failed to write PDNS response", "error", err)
-	}
-}
-
-type pdnsBufferedWriter struct {
-	header http.Header
-	status int
-	body   bytes.Buffer
-}
-
-func (w *pdnsBufferedWriter) Header() http.Header { return w.header }
-
-func (w *pdnsBufferedWriter) WriteHeader(status int) { w.status = status }
-
-func (w *pdnsBufferedWriter) Write(p []byte) (int, error) { return w.body.Write(p) }
-
-func copyHeader(dst, src http.Header) {
-	for key, values := range src {
-		for _, value := range values {
-			dst.Add(key, value)
-		}
-	}
 }
 
 func newPDNSError(status int, msg string, errs ...string) pdnsHTTPError {
