@@ -9,20 +9,18 @@ func (t *token) SetValue(v []byte) {
 	if !t.IsItem() {
 		panic("not implemented") // XXX
 	}
+	tmp := bytes.ReplaceAll(v, []byte("\\"), []byte("\\\\"))
+	tmp = bytes.ReplaceAll(tmp, []byte("\""), []byte("\\\""))
+
 	if bytes.IndexByte(v, ' ') >= 0 {
 		// XXX replace non-printable characters (even though the rfc
 		//     would allow them).
-		tmp := bytes.Replace(v, []byte("\\"), []byte("\\\\"), -1)
-		tmp = bytes.Replace(v, []byte("\""), []byte("\\\""), -1)
 		t.typ = tokenQuotedItem
 		t.val = []byte("\"" + string(tmp) + "\"")
 		return
 	}
-	tmp := bytes.Replace(v, []byte("\\"), []byte("\\\\"), -1)
-	tmp = bytes.Replace(v, []byte("\""), []byte("\\\""), -1)
 	t.typ = tokenItem
 	t.val = tmp
-	return
 }
 
 // Set the the ith value of the entry

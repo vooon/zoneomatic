@@ -522,21 +522,6 @@ func (l *lexer) backup() {
 	}
 }
 
-func (l *lexer) peek() byte {
-	r := l.next()
-	l.backup()
-	return r
-}
-
-// Consumes next byte if it's in the given string
-func (l *lexer) accept(valid string) bool {
-	if strings.ContainsRune(valid, rune(l.next())) {
-		return true
-	}
-	l.backup()
-	return false
-}
-
 // Consumes run of bytes from the given string
 func (l *lexer) acceptRun(valid string) {
 	for strings.ContainsRune(valid, rune(l.next())) {
