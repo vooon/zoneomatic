@@ -82,7 +82,11 @@ func AuthenticateAPIKeyHeader(ht HTPasswd, headerValue string) bool {
 		return false
 	}
 
-	user, password, ok := strings.Cut(string(decoded), ":")
+	// Be tolerant of credentials generated via `echo user:pass | base64`,
+	// which encode a trailing newline into the decoded payload.
+	creds := strings.TrimRight(string(decoded), "\r\n")
+
+	user, password, ok := strings.Cut(creds, ":")
 	if !ok || user == "" {
 		return false
 	}
