@@ -1,0 +1,1177 @@
+components:
+  schemas:
+    ACMEUpdateRequest:
+      description: ACMEUpdateRequest schema
+      properties:
+        subdomain:
+          type: string
+        txt:
+          type: string
+      required:
+        - subdomain
+        - txt
+      type: object
+    ACMEUpdateResponse:
+      description: ACMEUpdateResponse schema
+      properties:
+        txt:
+          type: string
+      type: object
+    HTTPError:
+      description: HTTPError schema
+      properties:
+        detail:
+          description: Human readable error message
+          nullable: true
+          type: string
+        errors:
+          items:
+            nullable: true
+            properties:
+              more:
+                additionalProperties:
+                  description: Additional information about the error
+                  nullable: true
+                description: Additional information about the error
+                nullable: true
+                type: object
+              name:
+                description: For example, name of the parameter that caused the error
+                type: string
+              reason:
+                description: Human readable error message
+                type: string
+            type: object
+          nullable: true
+          type: array
+        instance:
+          nullable: true
+          type: string
+        status:
+          description: HTTP status code
+          example: 403
+          nullable: true
+          type: integer
+        title:
+          description: Short title of the error
+          nullable: true
+          type: string
+        type:
+          description: URL of the error type. Can be used to lookup the error in a documentation
+          nullable: true
+          type: string
+      type: object
+    LegoHttpDefaultRequest:
+      description: LegoHttpDefaultRequest schema
+      properties:
+        fqdn:
+          type: string
+        value:
+          type: string
+      required:
+        - fqdn
+      type: object
+    LegoHttpDefaultResponse:
+      description: LegoHttpDefaultResponse schema
+      properties:
+        fqdn:
+          type: string
+        value:
+          type: string
+      type: object
+    ZMUpdateRequest:
+      description: ZMUpdateRequest schema
+      properties:
+        fqdn:
+          type: string
+        type:
+          type: string
+        values:
+          items:
+            type: string
+            x-fuego-required-marker: true
+          type: array
+      required:
+        - fqdn
+        - type
+        - values
+      type: object
+    ZMUpdateResponse:
+      description: ZMUpdateResponse schema
+      properties:
+        changed:
+          type: boolean
+        fqdn:
+          type: string
+      type: object
+    pdnsHTTPError:
+      description: pdnsHTTPError schema
+      properties:
+        error:
+          type: string
+        errors:
+          items:
+            nullable: true
+            type: string
+          nullable: true
+          type: array
+      type: object
+    pdnsNoContentResponse:
+      description: pdnsNoContentResponse schema
+    pdnsPatchZoneRequest:
+      description: pdnsPatchZoneRequest schema
+      properties:
+        rrsets:
+          items:
+            properties:
+              changetype:
+                nullable: true
+                type: string
+              comments:
+                items:
+                  nullable: true
+                nullable: true
+                type: array
+              name:
+                type: string
+              records:
+                items:
+                  properties:
+                    content:
+                      type: string
+                    disabled:
+                      type: boolean
+                  type: object
+                type: array
+              ttl:
+                nullable: true
+                type: integer
+              type:
+                type: string
+            type: object
+          type: array
+      type: object
+    pdnsServer:
+      description: pdnsServer schema
+      properties:
+        config_url:
+          type: string
+        daemon_type:
+          type: string
+        id:
+          type: string
+        type:
+          type: string
+        url:
+          type: string
+        version:
+          type: string
+        zones_url:
+          type: string
+      type: object
+    pdnsZone:
+      description: pdnsZone schema
+      properties:
+        account:
+          type: string
+        api_rectify:
+          type: boolean
+        catalog:
+          nullable: true
+          type: string
+        dnssec:
+          type: boolean
+        edited_serial:
+          maximum: 4294967295
+          minimum: 0
+          type: integer
+        id:
+          type: string
+        kind:
+          type: string
+        last_check:
+          maximum: 4294967295
+          minimum: 0
+          type: integer
+        master_tsig_key_ids:
+          items:
+            type: string
+          type: array
+        masters:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+        nameservers:
+          items:
+            nullable: true
+            type: string
+          nullable: true
+          type: array
+        notified_serial:
+          maximum: 4294967295
+          minimum: 0
+          type: integer
+        nsec3narrow:
+          type: boolean
+        nsec3param:
+          type: string
+        presigned:
+          type: boolean
+        rrsets:
+          items:
+            nullable: true
+            properties:
+              changetype:
+                nullable: true
+                type: string
+              comments:
+                items:
+                  nullable: true
+                nullable: true
+                type: array
+              name:
+                type: string
+              records:
+                items:
+                  properties:
+                    content:
+                      type: string
+                    disabled:
+                      type: boolean
+                  type: object
+                type: array
+              ttl:
+                nullable: true
+                type: integer
+              type:
+                type: string
+            type: object
+          nullable: true
+          type: array
+        serial:
+          maximum: 4294967295
+          minimum: 0
+          type: integer
+        slave_tsig_key_ids:
+          items:
+            type: string
+          type: array
+        soa_edit_api:
+          nullable: true
+          type: string
+        type:
+          type: string
+        url:
+          type: string
+        zone:
+          nullable: true
+          type: string
+      type: object
+    string:
+      description: string schema
+      type: string
+    unknown-interface:
+      description: unknown-interface schema
+  securitySchemes:
+    apiKeyAuth:
+      description: password
+      in: header
+      name: X-Api-Key
+      type: apiKey
+    apiUserAuth:
+      description: username
+      in: header
+      name: X-Api-User
+      type: apiKey
+    basicAuth:
+      scheme: basic
+      type: http
+    pdnsApiKeyAuth:
+      description: static api key
+      in: header
+      name: X-API-Key
+      type: apiKey
+info:
+  description: HTTP API for zoneomatic DNS updates and PowerDNS-compatible zone management.
+  title: Zoneomatic API
+  version: 0.0.1
+openapi: 3.1.0
+paths:
+  /acme/update:
+    post:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func4`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate ACME challenge TXT record"
+      operationId: POST_/acme/update
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ACMEUpdateRequest'
+        description: Request body for *server.ACMEUpdateRequest
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ACMEUpdateResponse'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/ACMEUpdateResponse'
+          description: Record updated
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - apiKeyAuth: []
+          apiUserAuth: []
+        - basicAuth: []
+      summary: update acme
+  /api/v1/servers:
+    get:
+      description: List the forged PowerDNS-compatible server instance.
+      operationId: pdnsListServers
+      parameters:
+        - in: header
+          name: Accept
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/pdnsServer'
+                type: array
+            application/xml:
+              schema:
+                items:
+                  $ref: '#/components/schemas/pdnsServer'
+                type: array
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns list servers
+  /api/v1/servers/{server_id}:
+    get:
+      description: Return the forged PowerDNS-compatible server instance.
+      operationId: pdnsGetServer
+      parameters:
+        - in: header
+          name: Accept
+          schema:
+            type: string
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsServer'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsServer'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns get server
+  /api/v1/servers/{server_id}/zones:
+    get:
+      description: List managed zones in a PowerDNS-compatible format.
+      operationId: pdnsListZones
+      parameters:
+        - description: Filter zones by fully-qualified zone name
+          in: query
+          name: zone
+          schema:
+            type: string
+        - in: header
+          name: Accept
+          schema:
+            type: string
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/pdnsZone'
+                type: array
+            application/xml:
+              schema:
+                items:
+                  $ref: '#/components/schemas/pdnsZone'
+                type: array
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns list zones
+    post:
+      description: create zone is not implemented for existing-file managed zones.
+      operationId: pdnsCreateZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns create zone
+  /api/v1/servers/{server_id}/zones/{zone_id}:
+    delete:
+      description: delete zone is not implemented for existing-file managed zones.
+      operationId: pdnsDeleteZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns delete zone
+    get:
+      description: Return a managed zone in PowerDNS-compatible format.
+      operationId: pdnsGetZone
+      parameters:
+        - description: Include rrsets in the zone response. Defaults to true.
+          in: query
+          name: rrsets
+          schema:
+            type: boolean
+        - description: Filter returned rrsets by fully-qualified record name
+          in: query
+          name: rrset_name
+          schema:
+            type: string
+        - description: Filter returned rrsets by record type; requires rrset_name
+          in: query
+          name: rrset_type
+          schema:
+            type: string
+        - in: header
+          name: Accept
+          schema:
+            type: string
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsZone'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsZone'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns get zone
+    patch:
+      description: Replace or delete managed RRSets in PowerDNS-compatible format.
+      operationId: pdnsPatchZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/pdnsPatchZoneRequest'
+        description: Request body for *server.pdnsPatchZoneRequest
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "204":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsNoContentResponse'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsNoContentResponse'
+          description: RRSets updated
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+          description: Invalid request body
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+          description: Unauthorized
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+          description: Zone or server not found
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+          description: Invalid rrset request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/pdnsHTTPError'
+          description: Unsupported patch request
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns patch zone
+    put:
+      description: update zone is not implemented for existing-file managed zones.
+      operationId: pdnsUpdateZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns update zone
+  /api/v1/servers/{server_id}/zones/{zone_id}/notify:
+    put:
+      description: notify zone is not implemented for existing-file managed zones.
+      operationId: pdnsNotifyZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns notify zone
+  /api/v1/servers/{server_id}/zones/{zone_id}/rectify:
+    put:
+      description: rectify zone is not implemented for existing-file managed zones.
+      operationId: pdnsRectifyZone
+      parameters:
+        - in: path
+          name: server_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: zone_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/unknown-interface'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - pdnsApiKeyAuth: []
+      summary: pdns rectify zone
+  /cleanup:
+    post:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func6`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nClean up ACME challenge TXT record using LEGO HTTP-REQ"
+      operationId: POST_/cleanup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegoHttpDefaultRequest'
+        description: Request body for *server.LegoHttpDefaultRequest
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegoHttpDefaultResponse'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/LegoHttpDefaultResponse'
+          description: Record updated
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - basicAuth: []
+      summary: cleanup acme via lego httpreq
+  /health:
+    get:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func1`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n\n---\n\nHealth check endpoint"
+      operationId: GET_/health
+      parameters:
+        - in: header
+          name: Accept
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/string'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/string'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      summary: health
+  /myip:
+    get:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func2`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n\n---\n\nReturn client's connection IP address"
+      operationId: GET_/myip
+      parameters:
+        - in: header
+          name: Accept
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/string'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/string'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      summary: myip
+  /nic/update:
+    get:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func3`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate DDNS record"
+      operationId: GET_/nic/update
+      parameters:
+        - description: record domain to update
+          in: query
+          name: hostname
+          required: true
+          schema:
+            type: string
+        - description: IP address to set
+          in: query
+          name: myip
+          schema:
+            type: string
+        - description: IPv6 address to set
+          in: query
+          name: myipv6
+          schema:
+            type: string
+        - description: Not supported, a no-op for compatibility.
+          in: query
+          name: offline
+          schema:
+            type: boolean
+        - in: header
+          name: Accept
+          schema:
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/string'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/string'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - basicAuth: []
+      summary: update ddns
+  /present:
+    post:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func5`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate ACME challenge TXT record using LEGO HTTP-REQ"
+      operationId: POST_/present
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LegoHttpDefaultRequest'
+        description: Request body for *server.LegoHttpDefaultRequest
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LegoHttpDefaultResponse'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/LegoHttpDefaultResponse'
+          description: Record updated
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - basicAuth: []
+      summary: update acme via lego httpreq
+  /zm/update:
+    post:
+      description: "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func7`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nReplace any existing DNS record value"
+      operationId: POST_/zm/update
+      parameters:
+        - in: header
+          name: Accept
+          schema:
+            type: string
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: '#/components/schemas/ZMUpdateRequest'
+        description: Request body for server.ZMUpdateRequest
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ZMUpdateResponse'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/ZMUpdateResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Bad Request _(validation or deserialization error)_
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+            application/xml:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+          description: Internal Server Error _(panics)_
+        default:
+          description: ""
+      security:
+        - basicAuth: []
+      summary: update any dns record
+servers:
+  - description: local server
+    url: http://127.0.0.1:9999
