@@ -8,10 +8,10 @@ builds:
     binary: zoneomatic
     ldflags: &ldflags >-
       -s -w
-      -X github.com/prometheus/common/version.Version={{ .Version }}
-      -X github.com/prometheus/common/version.Revision={{ .Commit }}
-      -X github.com/prometheus/common/version.Branch={{ .Branch }}
-      -X github.com/prometheus/common/version.BuildDate={{ .Date }}
+      -X github.com/vooon/zoneomatic/internal/buildinfo.Version={{ .Version }}
+      -X github.com/vooon/zoneomatic/internal/buildinfo.Commit={{ .Commit }}
+      -X github.com/vooon/zoneomatic/internal/buildinfo.Branch={{ .Branch }}
+      -X github.com/vooon/zoneomatic/internal/buildinfo.Date={{ .Date }}
     flags: &flags
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
