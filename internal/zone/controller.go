@@ -165,6 +165,9 @@ func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDo
 }
 
 func domainMatchesOrigin(domain, origin string) bool {
+	domain = strings.ToLower(normalizeZoneName(domain))
+	origin = strings.ToLower(normalizeZoneName(origin))
+
 	if domain == origin {
 		return true
 	}
@@ -178,7 +181,7 @@ func domainMatchesOrigin(domain, origin string) bool {
 }
 
 func (m Matcher) Match(e zonefile.Entry) bool {
-	if m.Domain != nil && !bytes.Equal(e.Domain(), m.Domain) {
+	if m.Domain != nil && !dnsNamesEqual(e.Domain(), m.Domain) {
 		return false
 	}
 
@@ -191,6 +194,10 @@ func (m Matcher) Match(e zonefile.Entry) bool {
 	}
 
 	return true
+}
+
+func dnsNamesEqual(a, b []byte) bool {
+	return strings.EqualFold(normalizeZoneName(string(a)), normalizeZoneName(string(b)))
 }
 
 func (m Matcher) String() string {
@@ -486,18 +493,27 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ne
 }
 
 func StripOrigin(name, origin string) string {
-	if !strings.HasSuffix(name, origin) {
+	name = strings.TrimSpace(name)
+	origin = strings.TrimSpace(origin)
+	nameFQDN := normalizeZoneName(name)
+	originFQDN := normalizeZoneName(origin)
+
+	if !domainMatchesOrigin(nameFQDN, originFQDN) {
 		return name
 	}
 
-	l1 := len(name)
-	l2 := len(origin)
-	if l1 == l2 {
+	if strings.EqualFold(nameFQDN, originFQDN) {
+		return "@"
+	}
+
+	l1 := len(nameFQDN)
+	l2 := len(originFQDN)
+	if l1 <= l2 {
 		return "@"
 	}
 
 	// strip suffix + dot
-	return name[:l1-l2-1]
+	return nameFQDN[:l1-l2-1]
 }
 
 func PrintEntries(entries []zonefile.Entry, w io.Writer) {
