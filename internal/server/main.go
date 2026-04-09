@@ -23,6 +23,8 @@ type Cli struct {
 	HTPasswdFile       string        `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
 	ZoneFiles          []string      `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
 	Debug              bool          `name:"debug" help:"Enable debug logging"`
+
+	OTEL OTelCLIConfig `embed:""`
 }
 
 func Main() {
@@ -33,16 +35,31 @@ func Main() {
 		kong.DefaultEnvars("ZM"),
 	)
 
-	lg := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: func() slog.Level {
 			if cli.Debug {
 				return slog.LevelDebug
 			}
 			return slog.LevelInfo
 		}(),
-	}))
+	})
 
-	slog.SetDefault(lg)
+	// Keep default stderr logging in place even when OTel logs are enabled.
+	slog.SetDefault(slog.New(baseHandler))
+
+	otelShutdown, err := setupTelemetry(context.Background(), cli.OTEL.toTelemetryConfig(cli.Debug))
+	kctx.FatalIfErrorf(err)
+	if otelShutdown.LogHandler != nil {
+		slog.SetDefault(slog.New(newTeeSlogHandler(baseHandler, otelShutdown.LogHandler)))
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+
+		if err := otelShutdown.Shutdown(shutdownCtx); err != nil {
+			slog.Error("OpenTelemetry shutdown failed", "error", err)
+		}
+	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

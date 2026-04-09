@@ -67,6 +67,7 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	srv := fuego.NewServer(
 		fuego.WithListener(listener),
+		fuego.WithGlobalMiddlewares(otelHTTPMiddleware()),
 		fuego.WithEngineOptions(
 			fuego.WithOpenAPIConfig(fuego.OpenAPIConfig{
 				JSONFilePath:     "doc/openapi.json",
