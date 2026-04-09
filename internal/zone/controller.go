@@ -18,6 +18,7 @@ import (
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 	"github.com/vooon/zoneomatic/pkg/fileutil"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory
@@ -90,7 +91,16 @@ func New(zonefiles ...string) (Controller, error) {
 	return &DomainCtrl{files: ret}, nil
 }
 
-func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
+func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) (err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.update_ddns_address")
+	span.SetAttributes(
+		attribute.String("zone.domain", domain),
+		attribute.Int("zone.addr_count", len(addrs)),
+	)
+	defer func() {
+		recordSpanError(span, err)
+		span.End()
+	}()
 
 	lg := slog.Default().With("domain", domain)
 
@@ -101,14 +111,26 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl != nil {
+		span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
 		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
 		return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
 	}
 
-	return fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	return err
 }
 
-func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error {
+func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) (err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.update_acme_challenge")
+	span.SetAttributes(
+		attribute.String("zone.domain", domain),
+		attribute.Bool("zone.old_token_provided", oldToken != ""),
+		attribute.Bool("zone.new_token_empty", newToken == ""),
+	)
+	defer func() {
+		recordSpanError(span, err)
+		span.End()
+	}()
 
 	lg := slog.Default().With("domain", domain)
 
@@ -123,14 +145,27 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl != nil {
+		span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
 		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
 		return fl.UpdateACMEChallenge(ctx, domainDot, newToken, oldToken)
 	}
 
-	return fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	return err
 }
 
 func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.update_record")
+	span.SetAttributes(
+		attribute.String("zone.domain", domain),
+		attribute.String("dns.rr.type", typ),
+		attribute.Int("zone.value_count", len(values)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
 
 	lg := slog.Default().With("domain", domain)
 
@@ -141,11 +176,13 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl != nil {
+		span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
 		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
 		return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
 	}
 
-	return false, fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+	return false, err
 }
 
 func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDot string) *File {
@@ -291,6 +328,19 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 }
 
 func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.update_records")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.Bool("zone.allow_new", allowNew),
+		attribute.Int("zone.matcher_count", len(matchers)),
+		attribute.Int("zone.new_entry_count", len(values)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
 	lg := lg1.With("matchers", matchers)
 
 	if len(matchers) == 0 {
@@ -306,8 +356,10 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 	oldEntries := zf.Entries()
 	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
 	found := false
+	matchedCount := 0
 	for idx, ent := range oldEntries {
 		if matchers.Match(ent) {
+			matchedCount++
 			if !found {
 				lg.DebugContext(ctx, "First matching record found", "index", idx, "old_values", ent.ValuesStrings())
 				newEntries = append(newEntries, values...)
@@ -320,6 +372,10 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 
 		newEntries = append(newEntries, ent)
 	}
+	span.SetAttributes(
+		attribute.Int("zone.old_entry_count", len(oldEntries)),
+		attribute.Int("zone.matched_entry_count", matchedCount),
+	)
 
 	// 2. If old record not found - add new values to the end, if allowed
 	if !found {
@@ -331,6 +387,7 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		lg.DebugContext(ctx, "No matching record not found, but inserting to the end")
 		newEntries = append(newEntries, values...)
 	}
+	span.SetAttributes(attribute.Int("zone.result_entry_count", len(newEntries)))
 
 	// 3. Check if it is changed
 	changed = !slices.EqualFunc(oldEntries, newEntries, func(e1, e2 zonefile.Entry) bool {
@@ -365,6 +422,14 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 }
 
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.update_ddns_address")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", domain),
+		attribute.Int("zone.addr_count", len(addrs)),
+	)
+	defer span.End()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -383,6 +448,10 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 		}
 		newAAAA = append(newAAAA, a)
 	}
+	span.SetAttributes(
+		attribute.Int("zone.addr_v4_count", len(newA)),
+		attribute.Int("zone.addr_v6_count", len(newAAAA)),
+	)
 
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 	newentbuf := bytes.NewBuffer(nil)
@@ -396,6 +465,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	values, err := parseEntries(newentbuf)
 	if err != nil {
+		recordSpanError(span, err)
 		return err
 	}
 
@@ -409,13 +479,26 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	_, err = s.updateRecords(ctx, lg, matchers, values, true)
 	if err != nil {
+		recordSpanError(span, err)
 		return err
 	}
 
 	return nil
 }
 
-func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) error {
+func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) (err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.update_acme_challenge")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", domain),
+		attribute.Bool("zone.old_token_provided", oldToken != ""),
+		attribute.Bool("zone.new_token_empty", newToken == ""),
+	)
+	defer func() {
+		recordSpanError(span, err)
+		span.End()
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -459,6 +542,19 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 }
 
 func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, newValues []string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.update_record")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", domain),
+		attribute.String("dns.rr.type", typ),
+		attribute.Int("zone.value_count", len(newValues)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
