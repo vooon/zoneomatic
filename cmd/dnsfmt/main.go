@@ -6,15 +6,17 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
+	"github.com/vooon/zoneomatic/internal/buildinfo"
 	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 	"github.com/vooon/zoneomatic/pkg/fileutil"
 )
 
 type Cli struct {
-	Origin  string   `short:"o" name:"origin" help:"set the origin, otherwise taken from $ORIGIN or the owner name of the SOA record."`
-	Inc     bool     `short:"i" name:"inc" default:"true" negatable:"" help:"increase the serial, default: ${default}"`
-	Replace bool     `short:"r" name:"replace" help:"Replace file with formatted output"`
-	Files   []string `arg:"" optional:"" placeholder:"FILE" type:"existingfile" help:"Zone file, use stdin if it is '-' or empty"`
+	Origin  string           `short:"o" name:"origin" help:"set the origin, otherwise taken from $ORIGIN or the owner name of the SOA record."`
+	Inc     bool             `short:"i" name:"inc" default:"true" negatable:"" help:"increase the serial, default: ${default}"`
+	Replace bool             `short:"r" name:"replace" help:"Replace file with formatted output"`
+	Files   []string         `arg:"" optional:"" placeholder:"FILE" type:"existingfile" help:"Zone file, use stdin if it is '-' or empty"`
+	Version kong.VersionFlag `help:"Print version and exit"`
 }
 
 func main() {
@@ -23,6 +25,7 @@ func main() {
 	kctx := kong.Parse(&cli,
 		kong.Description("DNS Zone file formatter"),
 		kong.DefaultEnvars("DNSFMT"),
+		kong.Vars{"version": buildinfo.String()},
 	)
 
 	if len(cli.Files) == 0 || (len(cli.Files) == 1 && cli.Files[0] == "-") {

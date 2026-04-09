@@ -12,17 +12,19 @@ import (
 
 	"github.com/alecthomas/kong"
 
+	"github.com/vooon/zoneomatic/internal/buildinfo"
 	"github.com/vooon/zoneomatic/internal/htpasswd"
 	"github.com/vooon/zoneomatic/internal/zone"
 )
 
 type Cli struct {
-	Listen             string        `name:"listen" default:"localhost:9999" help:"Server listen address"`
-	AcceptProxy        bool          `name:"accept-proxy" help:"Accept PROXY protocol"`
-	ProxyHeaderTimeout time.Duration `name:"proxy-header-timeout" default:"10s" help:"Timeout for PROXY headers"`
-	HTPasswdFile       string        `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
-	ZoneFiles          []string      `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
-	Debug              bool          `name:"debug" help:"Enable debug logging"`
+	Listen             string           `name:"listen" default:"localhost:9999" help:"Server listen address"`
+	AcceptProxy        bool             `name:"accept-proxy" help:"Accept PROXY protocol"`
+	ProxyHeaderTimeout time.Duration    `name:"proxy-header-timeout" default:"10s" help:"Timeout for PROXY headers"`
+	HTPasswdFile       string           `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
+	ZoneFiles          []string         `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
+	Debug              bool             `name:"debug" help:"Enable debug logging"`
+	Version            kong.VersionFlag `help:"Print version and exit"`
 
 	OTEL OTelConfig `embed:"" prefix:"otel-"`
 }
@@ -33,6 +35,7 @@ func Main() {
 	kctx := kong.Parse(&cli,
 		kong.Description("DNS Zone file updater"),
 		kong.DefaultEnvars("ZM"),
+		kong.Vars{"version": buildinfo.String()},
 	)
 
 	baseHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
