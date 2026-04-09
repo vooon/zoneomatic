@@ -132,7 +132,7 @@ func (s *DomainCtrl) findExactZoneFile(zoneName string) *File {
 }
 
 func (s *File) Snapshot(ctx context.Context) (snapshot ZoneSnapshot, err error) {
-	ctx, span := zoneTracer.Start(ctx, "zone.file.snapshot")
+	_, span := zoneTracer.Start(ctx, "zone.file.snapshot")
 	span.SetAttributes(attribute.String("zone.file", path.Base(s.path)))
 	defer func() {
 		span.SetAttributes(
