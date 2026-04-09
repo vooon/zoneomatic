@@ -24,7 +24,7 @@ type Cli struct {
 	ZoneFiles          []string      `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
 	Debug              bool          `name:"debug" help:"Enable debug logging"`
 
-	OTEL OTelCLIConfig `embed:""`
+	OTEL OTelConfig `embed:"" prefix:"otel-"`
 }
 
 func Main() {
@@ -47,7 +47,7 @@ func Main() {
 	// Keep default stderr logging in place even when OTel logs are enabled.
 	slog.SetDefault(slog.New(baseHandler))
 
-	otelShutdown, err := setupTelemetry(context.Background(), cli.OTEL.toTelemetryConfig(cli.Debug))
+	otelShutdown, err := setupTelemetry(context.Background(), cli.OTEL, cli.Debug)
 	kctx.FatalIfErrorf(err)
 	if otelShutdown.LogHandler != nil {
 		slog.SetDefault(slog.New(newTeeSlogHandler(baseHandler, otelShutdown.LogHandler)))

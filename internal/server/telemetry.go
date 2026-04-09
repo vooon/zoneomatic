@@ -23,41 +23,15 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-type telemetryConfig struct {
-	CommonEndpointURL  string
-	TracesEnabled      bool
-	TracesEndpointURL  string
-	MetricsEnabled     bool
-	MetricsEndpointURL string
-	LogsEnabled        bool
-	LogsEndpointURL    string
-	ServiceName        string
-	IncludeLogSource   bool
-}
-
-type OTelCLIConfig struct {
-	Endpoint        string `name:"otel-endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
-	TracesEnabled   bool   `name:"otel-enable-traces" help:"Enable OpenTelemetry traces signal"`
-	TracesEndpoint  string `name:"otel-traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
-	MetricsEnabled  bool   `name:"otel-enable-metrics" help:"Enable OpenTelemetry metrics signal"`
-	MetricsEndpoint string `name:"otel-metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
-	LogsEnabled     bool   `name:"otel-enable-logs" help:"Enable OpenTelemetry logs signal"`
-	LogsEndpoint    string `name:"otel-logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
-	ServiceName     string `name:"otel-service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
-}
-
-func (cfg OTelCLIConfig) toTelemetryConfig(includeLogSource bool) telemetryConfig {
-	return telemetryConfig{
-		CommonEndpointURL:  cfg.Endpoint,
-		TracesEnabled:      cfg.TracesEnabled,
-		TracesEndpointURL:  cfg.TracesEndpoint,
-		MetricsEnabled:     cfg.MetricsEnabled,
-		MetricsEndpointURL: cfg.MetricsEndpoint,
-		LogsEnabled:        cfg.LogsEnabled,
-		LogsEndpointURL:    cfg.LogsEndpoint,
-		ServiceName:        cfg.ServiceName,
-		IncludeLogSource:   includeLogSource,
-	}
+type OTelConfig struct {
+	Endpoint        string `name:"endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
+	TracesEnabled   bool   `name:"enable-traces" help:"Enable OpenTelemetry traces signal"`
+	TracesEndpoint  string `name:"traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
+	MetricsEnabled  bool   `name:"enable-metrics" help:"Enable OpenTelemetry metrics signal"`
+	MetricsEndpoint string `name:"metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
+	LogsEnabled     bool   `name:"enable-logs" help:"Enable OpenTelemetry logs signal"`
+	LogsEndpoint    string `name:"logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
+	ServiceName     string `name:"service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
 }
 
 type telemetryShutdown struct {
@@ -65,7 +39,7 @@ type telemetryShutdown struct {
 	LogHandler slog.Handler
 }
 
-func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown, error) {
+func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) (telemetryShutdown, error) {
 	ret := telemetryShutdown{
 		Shutdown: func(context.Context) error { return nil },
 	}
@@ -94,10 +68,9 @@ func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown
 	}
 
 	shutdownFns := make([]func(context.Context) error, 0, 3)
-	commonEndpoint := strings.TrimSpace(cfg.CommonEndpointURL)
 
 	if cfg.TracesEnabled {
-		endpoint := signalEndpoint(strings.TrimSpace(cfg.TracesEndpointURL), commonEndpoint)
+		endpoint := signalEndpoint(cfg.TracesEndpoint, cfg.Endpoint)
 		if endpoint == "" {
 			return ret, errors.New("otel traces enabled, but neither --otel-traces-endpoint nor --otel-endpoint is set")
 		}
@@ -117,7 +90,7 @@ func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown
 	}
 
 	if cfg.MetricsEnabled {
-		endpoint := signalEndpoint(strings.TrimSpace(cfg.MetricsEndpointURL), commonEndpoint)
+		endpoint := signalEndpoint(cfg.MetricsEndpoint, cfg.Endpoint)
 		if endpoint == "" {
 			return ret, errors.New("otel metrics enabled, but neither --otel-metrics-endpoint nor --otel-endpoint is set")
 		}
@@ -137,7 +110,7 @@ func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown
 	}
 
 	if cfg.LogsEnabled {
-		endpoint := signalEndpoint(strings.TrimSpace(cfg.LogsEndpointURL), commonEndpoint)
+		endpoint := signalEndpoint(cfg.LogsEndpoint, cfg.Endpoint)
 		if endpoint == "" {
 			return ret, errors.New("otel logs enabled, but neither --otel-logs-endpoint nor --otel-endpoint is set")
 		}
@@ -156,7 +129,7 @@ func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown
 		ret.LogHandler = otelslog.NewHandler(
 			"zoneomatic",
 			otelslog.WithLoggerProvider(lp),
-			otelslog.WithSource(cfg.IncludeLogSource),
+			otelslog.WithSource(includeLogSource),
 		)
 
 		slog.Info("OpenTelemetry logs enabled", "endpoint", endpoint, "service_name", serviceName)
@@ -174,11 +147,13 @@ func setupTelemetry(ctx context.Context, cfg telemetryConfig) (telemetryShutdown
 }
 
 func signalEndpoint(specific, common string) string {
+	specific = strings.TrimSpace(specific)
+
 	if specific != "" {
 		return specific
 	}
 
-	return common
+	return strings.TrimSpace(common)
 }
 
 func otelHTTPMiddleware() func(http.Handler) http.Handler {
