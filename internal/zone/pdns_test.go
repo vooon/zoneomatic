@@ -40,6 +40,18 @@ func TestFile_ReplaceRRSet(t *testing.T) {
 	assert.Equal(t, []string{"1.2.3.4"}, rrset.Records)
 }
 
+func TestFile_ReplaceRRSet_CaseInsensitiveName(t *testing.T) {
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+	changed, err := f.ReplaceRRSet(context.Background(), "LOOP.at.example.com.", "A", 60, []string{"127.0.0.1"})
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	snapshot, err := f.Snapshot(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, countRRSet(snapshot.RRsets, "loop.at.example.com.", "A"))
+}
+
 func TestFile_DeleteRRSet(t *testing.T) {
 	f := newZoneTemp(t, "./testdata/at.example.com.zone")
 
@@ -54,6 +66,18 @@ func TestFile_DeleteRRSet(t *testing.T) {
 	changed, err = f.DeleteRRSet(context.Background(), "missing.at.example.com.", "A")
 	require.NoError(t, err)
 	assert.False(t, changed)
+}
+
+func TestFile_DeleteRRSet_CaseInsensitiveName(t *testing.T) {
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+	changed, err := f.DeleteRRSet(context.Background(), "LOOP.at.example.com.", "AAAA")
+	require.NoError(t, err)
+	assert.True(t, changed)
+
+	snapshot, err := f.Snapshot(context.Background())
+	require.NoError(t, err)
+	assert.False(t, hasRRSet(snapshot.RRsets, "loop.at.example.com.", "AAAA"))
 }
 
 func findRRSet(t *testing.T, rrsets []RRSet, name, typ string) RRSet {
@@ -76,4 +100,15 @@ func hasRRSet(rrsets []RRSet, name, typ string) bool {
 	}
 
 	return false
+}
+
+func countRRSet(rrsets []RRSet, name, typ string) int {
+	var count int
+	for _, rrset := range rrsets {
+		if rrset.Name == name && rrset.Type == typ {
+			count++
+		}
+	}
+
+	return count
 }

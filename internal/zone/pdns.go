@@ -76,7 +76,7 @@ func (s *DomainCtrl) DeleteRRSet(ctx context.Context, zoneName, name, typ string
 func (s *DomainCtrl) findExactZoneFile(zoneName string) *File {
 	zoneName = normalizeZoneName(zoneName)
 	for _, fl := range s.files {
-		if normalizeZoneName(fl.origin) == zoneName {
+		if strings.EqualFold(normalizeZoneName(fl.origin), zoneName) {
 			return fl
 		}
 	}
@@ -242,7 +242,12 @@ func (s *File) relativeRecordName(name string) (string, error) {
 		return "", fmt.Errorf("record name not in zone %s: %s", s.origin, name)
 	}
 
-	return StripOrigin(name, s.origin), nil
+	shortName := StripOrigin(name, s.origin)
+	if shortName == "@" {
+		return shortName, nil
+	}
+
+	return strings.TrimSuffix(strings.ToLower(normalizeZoneName(shortName)), "."), nil
 }
 
 func normalizeZoneName(name string) string {
