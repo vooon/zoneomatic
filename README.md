@@ -49,6 +49,33 @@ Security notes
 - The server does not terminate TLS by itself; run it behind a reverse proxy with HTTPS.
 - If you enable `--accept-proxy`, only expose the service behind a trusted proxy/LB.
 
+OpenTelemetry
+-------------
+
+OpenTelemetry supports three explicit signals:
+
+- `--otel-enable-traces`
+- `--otel-enable-metrics`
+- `--otel-enable-logs`
+
+Use `--otel-endpoint` as a shared endpoint for enabled signals (recommended with OTEL Collector).
+If needed, override per signal with `--otel-traces-endpoint`, `--otel-metrics-endpoint`, `--otel-logs-endpoint`.
+You can enable any subset, or all three at once.
+- Service name defaults to `zoneomatic`; override with `--otel-service-name`.
+
+Example:
+
+```bash
+zoneomatic \
+  --htpasswd ./htpasswd \
+  --zone ./example.com.zone \
+  --otel-endpoint http://127.0.0.1:4318 \
+  --otel-enable-traces \
+  --otel-enable-metrics \
+  --otel-enable-logs \
+  --otel-service-name zoneomatic-prod
+```
+
 
 Command line options
 --------------------
@@ -65,7 +92,19 @@ Flags:
       --proxy-header-timeout=10s    Timeout for PROXY headers ($ZM_PROXY_HEADER_TIMEOUT)
   -p, --htpasswd=FILE               Passwords file (bcrypt only) ($ZM_HTPASSWD)
   -z, --zone=FILE,...               Zone files to update ($ZM_ZONE)
-      --debug                       Enable debug logging ($ZM_DEBUG)
+  --debug                       Enable debug logging ($ZM_DEBUG)
+  --otel-endpoint=STRING        Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
+      --otel-enable-traces          Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
+      --otel-traces-endpoint=STRING
+                                   OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
+      --otel-enable-metrics         Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
+      --otel-metrics-endpoint=STRING
+                                   OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
+      --otel-enable-logs            Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
+      --otel-logs-endpoint=STRING
+                                   OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
+      --otel-service-name="zoneomatic"
+                                    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
 ```
 
 > [!NOTE]
