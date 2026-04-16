@@ -8,7 +8,7 @@ require (
 	github.com/go-fuego/fuego v0.19.0
 	github.com/miekg/dns v1.1.72
 	github.com/otiai10/copy v1.14.1
-	github.com/pires/go-proxyproto v0.11.0
+	github.com/pires/go-proxyproto v0.12.0
 	github.com/stretchr/testify v1.11.1
 	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20260409134613-0f5595b196e0
 	go.opentelemetry.io/contrib/bridges/otelslog v0.18.0
