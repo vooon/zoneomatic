@@ -60,3 +60,27 @@ func (h *teeSlogHandler) WithGroup(name string) slog.Handler {
 
 	return &teeSlogHandler{handlers: out}
 }
+
+// levelFilterHandler wraps inner, silently dropping records below minLevel.
+// Use this to give the OTEL log handler a different minimum level than the
+// console handler.
+type levelFilterHandler struct {
+	minLevel slog.Level
+	inner    slog.Handler
+}
+
+func (f *levelFilterHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return level >= f.minLevel && f.inner.Enabled(ctx, level)
+}
+
+func (f *levelFilterHandler) Handle(ctx context.Context, r slog.Record) error {
+	return f.inner.Handle(ctx, r)
+}
+
+func (f *levelFilterHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &levelFilterHandler{minLevel: f.minLevel, inner: f.inner.WithAttrs(attrs)}
+}
+
+func (f *levelFilterHandler) WithGroup(name string) slog.Handler {
+	return &levelFilterHandler{minLevel: f.minLevel, inner: f.inner.WithGroup(name)}
+}
