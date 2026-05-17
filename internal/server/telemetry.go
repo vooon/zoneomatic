@@ -33,6 +33,7 @@ type OTelConfig struct {
 	MetricsEndpoint string            `name:"metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
 	LogsEnabled     bool              `name:"enable-logs" help:"Enable OpenTelemetry logs signal"`
 	LogsEndpoint    string            `name:"logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
+	LogsLevel       string            `name:"logs-level" help:"Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console" enum:"debug,info,warn,error," default:""`
 	ServiceName     string            `name:"service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
 }
 
@@ -149,11 +150,17 @@ func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) 
 		)
 		global.SetLoggerProvider(lp)
 		shutdownFns = append(shutdownFns, lp.Shutdown)
-		ret.LogHandler = otelslog.NewHandler(
+		otelLogH := slog.Handler(otelslog.NewHandler(
 			"zoneomatic",
 			otelslog.WithLoggerProvider(lp),
 			otelslog.WithSource(includeLogSource),
-		)
+		))
+		if cfg.LogsLevel != "" {
+			var lvl slog.Level
+			_ = lvl.UnmarshalText([]byte(cfg.LogsLevel))
+			otelLogH = &levelFilterHandler{minLevel: lvl, inner: otelLogH}
+		}
+		ret.LogHandler = otelLogH
 
 		slog.Info("OpenTelemetry logs enabled", "endpoint", endpoint, "service_name", serviceName)
 	}
