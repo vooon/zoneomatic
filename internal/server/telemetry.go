@@ -26,7 +26,7 @@ import (
 
 type OTelConfig struct {
 	Endpoint        string            `name:"endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
-	Headers         map[string]string `name:"header" help:"Additional HTTP headers for all OTLP exporters (e.g. Authorization=Bearer\ token), repeatable"`
+	Headers         map[string]string `name:"header" help:"Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token)"`
 	TracesEnabled   bool              `name:"enable-traces" help:"Enable OpenTelemetry traces signal"`
 	TracesEndpoint  string            `name:"traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
 	MetricsEnabled  bool              `name:"enable-metrics" help:"Enable OpenTelemetry metrics signal"`
