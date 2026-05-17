@@ -23,6 +23,7 @@ type Cli struct {
 	ProxyHeaderTimeout time.Duration    `name:"proxy-header-timeout" default:"10s" help:"Timeout for PROXY headers"`
 	HTPasswdFile       string           `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
 	ZoneFiles          []string         `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
+	AcmeTTL            int              `name:"acme-ttl" default:"0" help:"TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL"`
 	Debug              bool             `name:"debug" help:"Enable debug logging"`
 	Version            kong.VersionFlag `help:"Print version and exit"`
 
@@ -67,7 +68,7 @@ func Main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	zctl, err := zone.New(cli.ZoneFiles...)
+	zctl, err := zone.NewWithOptions([]zone.Option{zone.WithAcmeTTL(cli.AcmeTTL)}, cli.ZoneFiles...)
 	kctx.FatalIfErrorf(err)
 
 	htp, err := htpasswd.NewFromFile(cli.HTPasswdFile)

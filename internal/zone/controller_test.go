@@ -109,6 +109,35 @@ func TestFile_UpdateACMEChallenge(t *testing.T) {
 	}
 }
 
+func TestFile_UpdateACMEChallenge_WithTTL(t *testing.T) {
+	token := "fake/XKo9kaBlVnj9q0XWAWdoSYEPCOrhiZk3ztoBHx5c3O6X"
+
+	testCases := []struct {
+		name         string
+		file         string
+		domain       string
+		token        string
+		expectedFile string
+	}{
+		{"new-at-ttl30", "./testdata/at.example.com.zone", "_acme-challenge", token, "./testdata/expected-acme-ttl30-new-at.zone"},
+		{"zot-at-ttl30", "./testdata/at.example.com.zone", "_acme-challenge.zot", token, "./testdata/expected-acme-ttl30-new-zot.zone"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				assert := assert.New(t)
+				ctx := context.TODO()
+				f := newZoneTempWithOpts(t, tc.file, WithAcmeTTL(30))
+
+				err := f.UpdateACMEChallenge(ctx, tc.domain, tc.token, "")
+				assert.NoError(err)
+				assertFiles(t, tc.expectedFile, f.path)
+			})
+		})
+	}
+}
+
 func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.TODO()
@@ -123,6 +152,11 @@ func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 
 func newZoneTemp(t *testing.T, file string) *File {
 	t.Helper()
+	return newZoneTempWithOpts(t, file)
+}
+
+func newZoneTempWithOpts(t *testing.T, file string, opts ...Option) *File {
+	t.Helper()
 	require := require.New(t)
 
 	tmp := t.TempDir()
@@ -131,7 +165,7 @@ func newZoneTemp(t *testing.T, file string) *File {
 	err := fcopy.Copy(file, dest)
 	require.NoError(err)
 
-	ctrl, err := New(dest)
+	ctrl, err := NewWithOptions(opts, dest)
 	require.NoError(err)
 
 	dct := ctrl.(*DomainCtrl)
