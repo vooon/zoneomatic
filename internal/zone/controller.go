@@ -59,18 +59,35 @@ type Matcher struct {
 
 type Matchers []Matcher
 
+// Option configures the zone controller.
+type Option func(*DomainCtrl)
+
+// WithAcmeTTL sets an explicit TTL (in seconds) for ACME challenge TXT records.
+// If ttl is 0 (the default), no explicit TTL is written and the zone $TTL is used.
+func WithAcmeTTL(ttl int) Option {
+	return func(d *DomainCtrl) {
+		d.acmeTTL = ttl
+	}
+}
+
 type File struct {
-	origin string
-	path   string
-	lg     *slog.Logger
-	mu     sync.Mutex
+	origin  string
+	path    string
+	lg      *slog.Logger
+	mu      sync.Mutex
+	acmeTTL int
 }
 
 type DomainCtrl struct {
-	files []*File
+	files   []*File
+	acmeTTL int
 }
 
 func New(zonefiles ...string) (Controller, error) {
+	return NewWithOptions(nil, zonefiles...)
+}
+
+func NewWithOptions(opts []Option, zonefiles ...string) (Controller, error) {
 
 	ret := make([]*File, 0, len(zonefiles))
 	for _, fl := range zonefiles {
@@ -88,7 +105,15 @@ func New(zonefiles ...string) (Controller, error) {
 		ret = append(ret, f)
 	}
 
-	return &DomainCtrl{files: ret}, nil
+	dc := &DomainCtrl{files: ret}
+	for _, opt := range opts {
+		opt(dc)
+	}
+	for _, f := range dc.files {
+		f.acmeTTL = dc.acmeTTL
+	}
+
+	return dc, nil
 }
 
 func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) (err error) {
@@ -511,7 +536,11 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	shortDomain := []byte(StripOrigin(domain, s.origin))
 
 	newentbuf := bytes.NewBuffer(nil)
-	_, _ = fmt.Fprintf(newentbuf, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
+	if s.acmeTTL > 0 {
+		_, _ = fmt.Fprintf(newentbuf, "\n%s %d IN TXT %v\n", shortDomain, s.acmeTTL, quoteTXT(newToken))
+	} else {
+		_, _ = fmt.Fprintf(newentbuf, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
+	}
 
 	values, err := parseEntries(newentbuf)
 	if err != nil {
