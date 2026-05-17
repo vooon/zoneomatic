@@ -91,25 +91,25 @@ Usage: zoneomatic --htpasswd=FILE --zone=FILE,... [flags]
 DNS Zone file updater
 
 Flags:
-  -h, --help                       Show context-sensitive help.
-      --listen="localhost:9999"    Server listen address ($ZM_LISTEN)
-      --accept-proxy               Accept PROXY protocol ($ZM_ACCEPT_PROXY)
-      --proxy-header-timeout=10s   Timeout for PROXY headers ($ZM_PROXY_HEADER_TIMEOUT)
-  -p, --htpasswd=FILE              Passwords file (bcrypt only) ($ZM_HTPASSWD)
-  -z, --zone=FILE,...              Zone files to update ($ZM_ZONE)
-      --debug                      Enable debug logging ($ZM_DEBUG)
-      --version                    Print version and exit ($ZM_VERSION)
-      --otel-endpoint=URL          Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
-      --otel-header=KEY=VALUE;...  Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
-      --otel-enable-traces         Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
-      --otel-traces-endpoint=URL   OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
-      --otel-enable-metrics        Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
-      --otel-metrics-endpoint=URL  OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
-      --otel-enable-logs           Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
-      --otel-logs-endpoint=URL     OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
-      --otel-logs-level=""         Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
-      --otel-service-name="zoneomatic"
-                                   OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
+  -h, --help                              Show context-sensitive help.
+      --listen="localhost:9999"           Server listen address ($ZM_LISTEN)
+      --accept-proxy                      Accept PROXY protocol ($ZM_ACCEPT_PROXY)
+      --proxy-header-timeout=10s          Timeout for PROXY headers ($ZM_PROXY_HEADER_TIMEOUT)
+  -p, --htpasswd=FILE                     Passwords file (bcrypt only) ($ZM_HTPASSWD)
+  -z, --zone=FILE,...                     Zone files to update ($ZM_ZONE)
+      --acme-ttl=0                        TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL ($ZM_ACME_TTL)
+      --debug                             Enable debug logging ($ZM_DEBUG)
+      --version                           Print version and exit ($ZM_VERSION)
+      --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
+      --otel-header=KEY=VALUE;...         Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
+      --otel-enable-traces                Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
+      --otel-traces-endpoint=URL          OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
+      --otel-enable-metrics               Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
+      --otel-metrics-endpoint=URL         OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
+      --otel-enable-logs                  Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
+      --otel-logs-endpoint=URL            OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
+      --otel-logs-level=""                Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
+      --otel-service-name="zoneomatic"    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
 ```
 
 > [!NOTE]
