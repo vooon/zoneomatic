@@ -84,6 +84,9 @@ components:
       properties:
         fqdn:
           type: string
+        ttl:
+          nullable: true
+          type: integer
         type:
           type: string
         values:
@@ -338,8 +341,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - apiKeyAuth: []
           apiUserAuth: []
@@ -386,8 +387,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns list servers
@@ -433,8 +432,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns get server
@@ -489,8 +486,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns list zones
@@ -531,8 +526,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns create zone
@@ -579,8 +572,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns delete zone
@@ -645,8 +636,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns get zone
@@ -744,8 +733,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/pdnsHTTPError'
           description: Unsupported patch request
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns patch zone
@@ -791,8 +778,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns update zone
@@ -839,8 +824,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns notify zone
@@ -887,8 +870,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - pdnsApiKeyAuth: []
       summary: pdns rectify zone
@@ -931,8 +912,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - basicAuth: []
       summary: cleanup acme via lego httpreq
@@ -973,8 +952,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       summary: health
   /myip:
     get:
@@ -1013,8 +990,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       summary: myip
   /nic/update:
     get:
@@ -1074,8 +1049,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - basicAuth: []
       summary: update ddns
@@ -1118,8 +1091,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - basicAuth: []
       summary: update acme via lego httpreq
@@ -1167,8 +1138,6 @@ paths:
               schema:
                 $ref: '#/components/schemas/HTTPError'
           description: Internal Server Error _(panics)_
-        default:
-          description: ""
       security:
         - basicAuth: []
       summary: update any dns record
