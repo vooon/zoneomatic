@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
@@ -24,14 +25,15 @@ import (
 )
 
 type OTelConfig struct {
-	Endpoint        string `name:"endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
-	TracesEnabled   bool   `name:"enable-traces" help:"Enable OpenTelemetry traces signal"`
-	TracesEndpoint  string `name:"traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
-	MetricsEnabled  bool   `name:"enable-metrics" help:"Enable OpenTelemetry metrics signal"`
-	MetricsEndpoint string `name:"metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
-	LogsEnabled     bool   `name:"enable-logs" help:"Enable OpenTelemetry logs signal"`
-	LogsEndpoint    string `name:"logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
-	ServiceName     string `name:"service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
+	Endpoint        string            `name:"endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
+	Headers         map[string]string `name:"header" help:"Additional HTTP headers for all OTLP exporters (e.g. Authorization=Bearer\ token), repeatable"`
+	TracesEnabled   bool              `name:"enable-traces" help:"Enable OpenTelemetry traces signal"`
+	TracesEndpoint  string            `name:"traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
+	MetricsEnabled  bool              `name:"enable-metrics" help:"Enable OpenTelemetry metrics signal"`
+	MetricsEndpoint string            `name:"metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
+	LogsEnabled     bool              `name:"enable-logs" help:"Enable OpenTelemetry logs signal"`
+	LogsEndpoint    string            `name:"logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
+	ServiceName     string            `name:"service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
 }
 
 type telemetryShutdown struct {
@@ -75,7 +77,11 @@ func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) 
 			return ret, errors.New("otel traces enabled, but neither --otel-traces-endpoint nor --otel-endpoint is set")
 		}
 
-		exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpointURL(endpoint))
+		traceOpts := []otlptracehttp.Option{otlptracehttp.WithEndpointURL(endpoint)}
+		if len(cfg.Headers) > 0 {
+			traceOpts = append(traceOpts, otlptracehttp.WithHeaders(cfg.Headers))
+		}
+		exp, err := otlptracehttp.New(ctx, traceOpts...)
 		if err != nil {
 			return ret, fmt.Errorf("init traces exporter: %w", err)
 		}
@@ -95,7 +101,11 @@ func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) 
 			return ret, errors.New("otel metrics enabled, but neither --otel-metrics-endpoint nor --otel-endpoint is set")
 		}
 
-		exp, err := otlpmetrichttp.New(ctx, otlpmetrichttp.WithEndpointURL(endpoint))
+		metricsOpts := []otlpmetrichttp.Option{otlpmetrichttp.WithEndpointURL(endpoint)}
+		if len(cfg.Headers) > 0 {
+			metricsOpts = append(metricsOpts, otlpmetrichttp.WithHeaders(cfg.Headers))
+		}
+		exp, err := otlpmetrichttp.New(ctx, metricsOpts...)
 		if err != nil {
 			return ret, fmt.Errorf("init metrics exporter: %w", err)
 		}
@@ -115,7 +125,20 @@ func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) 
 			return ret, errors.New("otel logs enabled, but neither --otel-logs-endpoint nor --otel-endpoint is set")
 		}
 
-		exp, err := otlploghttp.New(ctx, otlploghttp.WithEndpointURL(endpoint))
+		// otlploghttp.WithEndpointURL stores the URL path via newSetting(u.Path),
+		// which marks the setting as explicitly set even when the path is empty.
+		// This prevents the fallback defaultPath ("/v1/logs") from being applied,
+		// unlike otlptracehttp/otlpmetrichttp which use cleanPath() internally.
+		// Normalise: append "/v1/logs" when the URL has no meaningful path.
+		logEndpoint := endpoint
+		if parsed, parseErr := url.Parse(endpoint); parseErr == nil && (parsed.Path == "" || parsed.Path == "/") {
+			logEndpoint = strings.TrimSuffix(endpoint, "/") + "/v1/logs"
+		}
+		logOpts := []otlploghttp.Option{otlploghttp.WithEndpointURL(logEndpoint)}
+		if len(cfg.Headers) > 0 {
+			logOpts = append(logOpts, otlploghttp.WithHeaders(cfg.Headers))
+		}
+		exp, err := otlploghttp.New(ctx, logOpts...)
 		if err != nil {
 			return ret, fmt.Errorf("init logs exporter: %w", err)
 		}
