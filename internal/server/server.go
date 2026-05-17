@@ -42,6 +42,7 @@ type LegoHttpDefaultResponse struct {
 type ZMUpdateRequest struct {
 	Fqdn   string   `json:"fqdn" validate:"required"`
 	Type   string   `json:"type" validate:"required"`
+	TTL    int      `json:"ttl,omitempty"`
 	Values []string `json:"values" validate:"required"`
 }
 
@@ -342,7 +343,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return nil, err
 			}
 
-			changed, err := zctl.ZMUpdateRecord(ctx, req.Fqdn, req.Type, req.Values)
+			changed, err := zctl.ZMUpdateRecord(ctx, req.Fqdn, req.Type, req.TTL, req.Values)
 			if err != nil {
 				return nil, zoneErrorToHTTPError(err)
 			}

@@ -143,7 +143,7 @@ func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 		ctx := context.TODO()
 		f := newZoneTemp(t, "./testdata/at.example.com.zone")
 
-		changed, err := f.ZMUpdateRecord(ctx, "loop", "a", []string{"1.2.3.4"})
+		changed, err := f.ZMUpdateRecord(ctx, "loop", "a", 0, []string{"1.2.3.4"})
 		require.NoError(t, err)
 		assert.True(t, changed)
 		assertFiles(t, "./testdata/expected-loop-v4.zone", f.path)

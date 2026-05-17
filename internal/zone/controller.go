@@ -48,7 +48,7 @@ type Controller interface {
 	// DeleteRRSet removes the requested RRSet from a specific zone.
 	DeleteRRSet(ctx context.Context, zoneName, name, typ string) (changed bool, err error)
 	// ZMUpdateRecord replace record values
-	ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error)
+	ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, values []string) (changed bool, err error)
 }
 
 type Matcher struct {
@@ -179,7 +179,7 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 	return err
 }
 
-func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ string, values []string) (changed bool, err error) {
+func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, values []string) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.update_record")
 	span.SetAttributes(
 		attribute.String("zone.domain", domain),
@@ -203,7 +203,7 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 	if fl != nil {
 		span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
 		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-		return fl.ZMUpdateRecord(ctx, domainDot, typ, values)
+		return fl.ZMUpdateRecord(ctx, domainDot, typ, ttl, values)
 	}
 
 	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
@@ -570,7 +570,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	return nil
 }
 
-func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, newValues []string) (changed bool, err error) {
+func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, newValues []string) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_record")
 	span.SetAttributes(
 		attribute.String("zone.file", path.Base(s.path)),
@@ -599,7 +599,11 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ne
 	newentbuf := bytes.NewBuffer(nil)
 
 	for _, val := range newValues {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s IN %s %s\n", shortDomain, typ, val)
+		if ttl > 0 {
+			_, _ = fmt.Fprintf(newentbuf, "\n%s %d IN %s %s\n", shortDomain, ttl, typ, val)
+		} else {
+			_, _ = fmt.Fprintf(newentbuf, "\n%s IN %s %s\n", shortDomain, typ, val)
+		}
 	}
 
 	values, err := parseEntries(newentbuf)

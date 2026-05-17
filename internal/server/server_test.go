@@ -123,7 +123,7 @@ func (f *fakeZoneController) DeleteRRSet(_ context.Context, zoneName, name, typ 
 	return true, nil
 }
 
-func (f *fakeZoneController) ZMUpdateRecord(_ context.Context, _ string, _ string, _ []string) (changed bool, err error) {
+func (f *fakeZoneController) ZMUpdateRecord(_ context.Context, _ string, _ string, _ int, _ []string) (changed bool, err error) {
 	return false, nil
 }
 
