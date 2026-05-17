@@ -99,16 +99,14 @@ Flags:
   -z, --zone=FILE,...              Zone files to update ($ZM_ZONE)
       --debug                      Enable debug logging ($ZM_DEBUG)
       --version                    Print version and exit ($ZM_VERSION)
-      --otel-endpoint=STRING       Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
+      --otel-endpoint=URL          Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
       --otel-header=KEY=VALUE;...  Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
       --otel-enable-traces         Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
-      --otel-traces-endpoint=STRING
-                                   OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
+      --otel-traces-endpoint=URL   OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
       --otel-enable-metrics        Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
-      --otel-metrics-endpoint=STRING
-                                   OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
+      --otel-metrics-endpoint=URL  OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
       --otel-enable-logs           Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
-      --otel-logs-endpoint=STRING  OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
+      --otel-logs-endpoint=URL     OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
       --otel-logs-level=""         Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
       --otel-service-name="zoneomatic"
                                    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)

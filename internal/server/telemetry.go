@@ -25,14 +25,14 @@ import (
 )
 
 type OTelConfig struct {
-	Endpoint        string            `name:"endpoint" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
+	Endpoint        string            `name:"endpoint" placeholder:"URL" help:"Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL)"`
 	Headers         map[string]string `name:"header" help:"Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token)"`
 	TracesEnabled   bool              `name:"enable-traces" help:"Enable OpenTelemetry traces signal"`
-	TracesEndpoint  string            `name:"traces-endpoint" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
+	TracesEndpoint  string            `name:"traces-endpoint" placeholder:"URL" help:"OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces)"`
 	MetricsEnabled  bool              `name:"enable-metrics" help:"Enable OpenTelemetry metrics signal"`
-	MetricsEndpoint string            `name:"metrics-endpoint" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
+	MetricsEndpoint string            `name:"metrics-endpoint" placeholder:"URL" help:"OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics)"`
 	LogsEnabled     bool              `name:"enable-logs" help:"Enable OpenTelemetry logs signal"`
-	LogsEndpoint    string            `name:"logs-endpoint" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
+	LogsEndpoint    string            `name:"logs-endpoint" placeholder:"URL" help:"OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs)"`
 	LogsLevel       string            `name:"logs-level" help:"Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console" enum:"debug,info,warn,error," default:""`
 	ServiceName     string            `name:"service-name" default:"zoneomatic" help:"OpenTelemetry service name"`
 }
