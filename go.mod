@@ -1,11 +1,11 @@
 module github.com/vooon/zoneomatic
 
-go 1.26.2
+go 1.26.5
 
 require (
 	github.com/alecthomas/kong v1.16.0
 	github.com/getkin/kin-openapi v0.142.0
-	github.com/go-fuego/fuego v0.19.0
+	github.com/go-fuego/fuego v0.20.0
 	github.com/miekg/dns v1.1.72
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.15.0
@@ -33,7 +33,7 @@ replace (
 require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.13 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -50,7 +50,7 @@ require (
 	github.com/oasdiff/yaml v0.1.1 // indirect
 	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/otiai10/mint v1.6.3 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0 // indirect
