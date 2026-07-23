@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/alecthomas/kong v1.16.0
-	github.com/getkin/kin-openapi v0.142.0
+	github.com/getkin/kin-openapi v0.143.0
 	github.com/go-fuego/fuego v0.20.0
 	github.com/miekg/dns v1.1.72
 	github.com/otiai10/copy v1.14.1
