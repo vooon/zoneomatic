@@ -352,7 +352,7 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	return
 }
 
-func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, allowNew bool) (changed bool, err error) {
+func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, anchor []byte, allowNew bool) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_records")
 	span.SetAttributes(
 		attribute.String("zone.file", path.Base(s.path)),
@@ -402,15 +402,26 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		attribute.Int("zone.matched_entry_count", matchedCount),
 	)
 
-	// 2. If old record not found - add new values to the end, if allowed
+	// 2. If old record not found - add new values, if allowed
 	if !found {
 		if !allowNew {
 			lg.ErrorContext(ctx, "No matching record not found, but insert is not allowed.")
 			return false, ErrRecordNotFound
 		}
 
-		lg.DebugContext(ctx, "No matching record not found, but inserting to the end")
-		newEntries = append(newEntries, values...)
+		if anchor != nil {
+			if idx := anchorInsertIndex(newEntries, anchor); idx >= 0 {
+				lg.DebugContext(ctx, "No matching record not found, inserting after anchor", "index", idx)
+				newEntries = slices.Insert(newEntries, idx+1, values...)
+				span.SetAttributes(attribute.Int("zone.anchor_index", idx))
+			} else {
+				lg.DebugContext(ctx, "No matching record not found, no anchor found, inserting to the end")
+				newEntries = append(newEntries, values...)
+			}
+		} else {
+			lg.DebugContext(ctx, "No matching record not found, but inserting to the end")
+			newEntries = append(newEntries, values...)
+		}
 	}
 	span.SetAttributes(attribute.Int("zone.result_entry_count", len(newEntries)))
 
@@ -444,6 +455,34 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 
 	lg.InfoContext(ctx, "File saved", "changed", changed)
 	return
+}
+
+// anchorInsertIndex returns the index of the last entry before which the
+// new values should be inserted: the last entry with the same domain as the
+// anchor, or, if none, the last _acme-challenge.* entry. Returns -1 if there
+// is no suitable place, in which case new values are appended to the end.
+func anchorInsertIndex(entries []zonefile.Entry, anchor []byte) int {
+	same, acme := -1, -1
+	for i, e := range entries {
+		if e.IsComment || e.IsControl {
+			continue
+		}
+		d := e.Domain()
+		if d == nil {
+			continue
+		}
+		if dnsNamesEqual(d, anchor) {
+			same = i
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(normalizeZoneName(string(d))), "_acme-challenge.") {
+			acme = i
+		}
+	}
+	if same >= 0 {
+		return same
+	}
+	return acme
 }
 
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
@@ -502,7 +541,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeAAAA})
 	}
 
-	_, err = s.updateRecords(ctx, lg, matchers, values, true)
+	_, err = s.updateRecords(ctx, lg, matchers, values, nil, true)
 	if err != nil {
 		recordSpanError(span, err)
 		return err
@@ -562,7 +601,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 		},
 	}
 
-	_, err = s.updateRecords(ctx, lg, matchers, values, true)
+	_, err = s.updateRecords(ctx, lg, matchers, values, shortDomain, true)
 	if err != nil {
 		return err
 	}
@@ -618,7 +657,7 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, tt
 		},
 	}
 
-	return s.updateRecords(ctx, lg, matchers, values, false)
+	return s.updateRecords(ctx, lg, matchers, values, nil, false)
 }
 
 func StripOrigin(name, origin string) string {
