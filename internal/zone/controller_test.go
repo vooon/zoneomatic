@@ -138,6 +138,36 @@ func TestFile_UpdateACMEChallenge_WithTTL(t *testing.T) {
 	}
 }
 
+func TestFile_UpdateACMEChallenge_WildcardPlacement(t *testing.T) {
+	token1 := "fake/token1-helloworld"
+	token2 := "fake/token2-helloworld"
+
+	// NOTE: use synctest to have predictable time.New()
+	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+		ctx := context.TODO()
+		f := newZoneTemp(t, "./testdata/acme-apex-at.zone")
+
+		// Present first token - should replace the pre-seeded placeholder
+		err := f.UpdateACMEChallenge(ctx, "_acme-challenge", token1, EmptyPlaceholder)
+		assert.NoError(err)
+
+		// Present second token - no placeholder left, must be inserted right after the first
+		err = f.UpdateACMEChallenge(ctx, "_acme-challenge", token2, EmptyPlaceholder)
+		assert.NoError(err)
+
+		assertFiles(t, "./testdata/expected-acme-wildcard-present.zone", f.path)
+
+		// Cleanup - replace tokens back to placeholders in place
+		err = f.UpdateACMEChallenge(ctx, "_acme-challenge", "", token2)
+		assert.NoError(err)
+		err = f.UpdateACMEChallenge(ctx, "_acme-challenge", "", token1)
+		assert.NoError(err)
+
+		assertFiles(t, "./testdata/expected-acme-wildcard-clean.zone", f.path)
+	})
+}
+
 func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.TODO()

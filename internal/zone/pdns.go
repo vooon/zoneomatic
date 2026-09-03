@@ -276,7 +276,7 @@ func (s *File) ReplaceRRSet(ctx context.Context, name, typ string, ttl int, valu
 		RRType: rrType,
 	}}
 
-	return s.updateRecords(ctx, lg, matchers, entries, true)
+	return s.updateRecords(ctx, lg, matchers, entries, nil, true)
 }
 
 func (s *File) DeleteRRSet(ctx context.Context, name, typ string) (changed bool, err error) {
@@ -313,7 +313,7 @@ func (s *File) DeleteRRSet(ctx context.Context, name, typ string) (changed bool,
 		RRType: rrType,
 	}}
 
-	changed, err = s.updateRecords(ctx, lg, matchers, nil, false)
+	changed, err = s.updateRecords(ctx, lg, matchers, nil, nil, false)
 	if errors.Is(err, ErrRecordNotFound) {
 		return false, nil
 	}
