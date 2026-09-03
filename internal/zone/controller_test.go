@@ -168,6 +168,228 @@ func TestFile_UpdateACMEChallenge_WildcardPlacement(t *testing.T) {
 	})
 }
 
+func TestFile_UpdatePTRAddress(t *testing.T) {
+	t.Run("append is idempotent for existing target", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/3.2.1.in-addr.arpa.zone")
+			changed, err := f.UpdatePTRAddress(ctx, "4.3.2.1.in-addr.arpa.", "hub.example.com.", PTRUpdateAppend)
+			assert.NoError(t, err)
+			assert.False(t, changed)
+			assertFiles(t, "./testdata/3.2.1.in-addr.arpa.zone", f.path)
+		})
+	})
+
+	t.Run("append keeps existing and adds new after", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/3.2.1.in-addr.arpa.zone")
+			_, err := f.UpdatePTRAddress(ctx, "4.3.2.1.in-addr.arpa.", "new.example.com.", PTRUpdateAppend)
+			assert.NoError(t, err)
+			assertFiles(t, "./testdata/expected-ptr-append.zone", f.path)
+		})
+	})
+
+	t.Run("replace swaps single record keeping siblings", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/3.2.1.in-addr.arpa.zone")
+			_, err := f.UpdatePTRAddress(ctx, "4.3.2.1.in-addr.arpa.", "rebooted.example.com.", PTRUpdateReplace)
+			assert.NoError(t, err)
+			assertFiles(t, "./testdata/expected-ptr-replace.zone", f.path)
+		})
+	})
+
+	t.Run("replace-all leaves exactly one record", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/3.2.1.in-addr.arpa.zone")
+			_, err := f.UpdatePTRAddress(ctx, "4.3.2.1.in-addr.arpa.", "clean.example.com.", PTRUpdateReplaceAll)
+			assert.NoError(t, err)
+			assertFiles(t, "./testdata/expected-ptr-replace-all.zone", f.path)
+		})
+	})
+
+	t.Run("creates record for new name", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/3.2.1.in-addr.arpa.zone")
+			_, err := f.UpdatePTRAddress(ctx, "5.3.2.1.in-addr.arpa.", "five.example.com.", PTRUpdateReplaceAll)
+			assert.NoError(t, err)
+			assertFiles(t, "./testdata/expected-ptr-create.zone", f.path)
+		})
+	})
+}
+
+func TestDomainCtrl_UpdatePTR(t *testing.T) {
+	t.Run("replace-all single address", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			dc := newDomainCtrlTemp(t, []string{"./testdata/3.2.1.in-addr.arpa.zone"})
+
+			changed, err := dc.UpdatePTR(ctx, "clean.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")}, PTRUpdateReplaceAll)
+			assert.NoError(t, err)
+			assert.True(t, changed)
+
+			snap := mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+			assert.Equal(t, []string{"clean.example.com."}, findRRSet(t, snap.RRsets, "4.3.2.1.in-addr.arpa.", "PTR").Records)
+			assert.Equal(t, 1, countRRSet(snap.RRsets, "4.3.2.1.in-addr.arpa.", "PTR"))
+		})
+	})
+
+	t.Run("append adds after existing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			dc := newDomainCtrlTemp(t, []string{"./testdata/3.2.1.in-addr.arpa.zone"})
+
+			changed, err := dc.UpdatePTR(ctx, "new.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")}, PTRUpdateAppend)
+			assert.NoError(t, err)
+			assert.True(t, changed)
+
+			snap := mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+			assert.Equal(t, []string{"hub.example.com.", "legacy.example.com.", "new.example.com."}, findRRSet(t, snap.RRsets, "4.3.2.1.in-addr.arpa.", "PTR").Records)
+		})
+	})
+
+	t.Run("no matching reverse zone", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			dc := newDomainCtrlTemp(t, []string{"./testdata/at.example.com.zone"})
+
+			_, err := dc.UpdatePTR(ctx, "hub.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")}, PTRUpdateReplaceAll)
+			assert.ErrorIs(t, err, ErrZoneNotFound)
+		})
+	})
+
+	t.Run("empty addresses", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			dc := newDomainCtrlTemp(t, []string{"./testdata/3.2.1.in-addr.arpa.zone"})
+
+			_, err := dc.UpdatePTR(ctx, "hub.example.com.", nil, PTRUpdateReplaceAll)
+			assert.Error(t, err)
+		})
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			dc := newDomainCtrlTemp(t, []string{"./testdata/3.2.1.in-addr.arpa.zone"})
+
+			_, err := dc.UpdatePTR(ctx, "hub.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")}, "banana")
+			assert.Error(t, err)
+		})
+	})
+}
+
+func TestDomainCtrl_UpdateDDNSAddress_ManagePTR(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.TODO()
+
+		dc := newDomainCtrlTemp(t, []string{
+			"./testdata/at.example.com.zone",
+			"./testdata/3.2.1.in-addr.arpa.zone",
+			"./testdata/8.b.d.0.1.0.0.2.ip6.arpa.zone",
+		}, WithDDNSManagePTR(true))
+
+		// dual stack host: forward A/AAAA + v4 PTR + v6 PTR
+		err := dc.UpdateDDNSAddress(ctx, "hub.at.example.com.", []netip.Addr{
+			netip.MustParseAddr("1.2.3.4"),
+			netip.MustParseAddr("2001:db8::1"),
+		})
+		require.NoError(t, err)
+
+		fwd := mustZoneSnapshot(t, dc, "at.example.com.")
+		assert.Equal(t, []string{"1.2.3.4"}, findRRSet(t, fwd.RRsets, "hub.at.example.com.", "A").Records)
+		assert.Equal(t, []string{"2001:db8::1"}, findRRSet(t, fwd.RRsets, "hub.at.example.com.", "AAAA").Records)
+
+		v4 := mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+		assert.Equal(t, []string{"router.example.com."}, findRRSet(t, v4.RRsets, "1.3.2.1.in-addr.arpa.", "PTR").Records)
+		assert.Equal(t, []string{"hub.at.example.com."}, findRRSet(t, v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR").Records)
+		assert.Equal(t, 1, countRRSet(v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR"))
+
+		v6 := mustZoneSnapshot(t, dc, "8.b.d.0.1.0.0.2.ip6.arpa.")
+		assert.Equal(t, []string{"hub.at.example.com."}, findRRSet(t, v6.RRsets, "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa.", "PTR").Records)
+
+		// same update again: no growth
+		err = dc.UpdateDDNSAddress(ctx, "hub.at.example.com.", []netip.Addr{
+			netip.MustParseAddr("1.2.3.4"),
+			netip.MustParseAddr("2001:db8::1"),
+		})
+		require.NoError(t, err)
+		v4 = mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+		assert.Equal(t, []string{"hub.at.example.com."}, findRRSet(t, v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR").Records)
+		assert.Equal(t, 1, countRRSet(v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR"))
+
+		// host moved to a new IPv4: stale PTR removed, new one added
+		err = dc.UpdateDDNSAddress(ctx, "hub.at.example.com.", []netip.Addr{
+			netip.MustParseAddr("1.2.3.5"),
+			netip.MustParseAddr("2001:db8::1"),
+		})
+		require.NoError(t, err)
+		v4 = mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+		assert.False(t, hasRRSet(v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR"))
+		assert.Equal(t, []string{"hub.at.example.com."}, findRRSet(t, v4.RRsets, "5.3.2.1.in-addr.arpa.", "PTR").Records)
+	})
+}
+
+func TestDomainCtrl_UpdateDDNSAddress_ManagePTR_Disabled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.TODO()
+
+		dc := newDomainCtrlTemp(t, []string{
+			"./testdata/at.example.com.zone",
+			"./testdata/3.2.1.in-addr.arpa.zone",
+		})
+
+		err := dc.UpdateDDNSAddress(ctx, "hub.at.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")})
+		require.NoError(t, err)
+
+		// reverse zone must be untouched
+		v4 := mustZoneSnapshot(t, dc, "3.2.1.in-addr.arpa.")
+		assert.Equal(t, []string{"hub.example.com.", "legacy.example.com."}, findRRSet(t, v4.RRsets, "4.3.2.1.in-addr.arpa.", "PTR").Records)
+	})
+}
+
+func TestDomainCtrl_UpdateDDNSAddress_ManagePTR_NoReverseZone(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.TODO()
+
+		dc := newDomainCtrlTemp(t, []string{"./testdata/at.example.com.zone"}, WithDDNSManagePTR(true))
+
+		// missing reverse zone must not be an issue
+		err := dc.UpdateDDNSAddress(ctx, "hub.at.example.com.", []netip.Addr{netip.MustParseAddr("1.2.3.4")})
+		require.NoError(t, err)
+	})
+}
+
+func newDomainCtrlTemp(t *testing.T, files []string, opts ...Option) *DomainCtrl {
+	t.Helper()
+	require := require.New(t)
+
+	tmp := t.TempDir()
+	paths := make([]string, 0, len(files))
+	for _, fl := range files {
+		dest := path.Join(tmp, path.Base(fl))
+		require.NoError(fcopy.Copy(fl, dest))
+		paths = append(paths, dest)
+	}
+
+	ctrl, err := NewWithOptions(opts, paths...)
+	require.NoError(err)
+
+	dc, ok := ctrl.(*DomainCtrl)
+	require.True(ok)
+	return dc
+}
+
+func mustZoneSnapshot(t *testing.T, dc *DomainCtrl, zoneName string) ZoneSnapshot {
+	t.Helper()
+	snap, err := dc.GetZone(context.Background(), zoneName)
+	require.NoError(t, err)
+	return snap
+}
+
 func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.TODO()

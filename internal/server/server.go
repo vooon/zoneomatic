@@ -51,6 +51,19 @@ type ZMUpdateResponse struct {
 	Changed bool   `json:"changed"`
 }
 
+type ZMUpdatePTRRequest struct {
+	Target    string             `json:"target" validate:"required"`
+	Addresses []string           `json:"addresses" validate:"required"`
+	Mode      zone.PTRUpdateMode `json:"mode,omitempty"`
+}
+
+type ZMUpdatePTRResponse struct {
+	Target    string             `json:"target"`
+	Addresses []string           `json:"addresses"`
+	Mode      zone.PTRUpdateMode `json:"mode"`
+	Changed   bool               `json:"changed"`
+}
+
 func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 
 	listener, err := net.Listen("tcp", cli.Listen)
@@ -352,6 +365,57 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		},
 		option.Summary("update any dns record"),
 		option.Description("Replace any existing DNS record value"),
+		option.Middleware(authMw),
+		option.Security(
+			openapi3.SecurityRequirement{
+				"basicAuth": []string{},
+			},
+		),
+	)
+
+	fuego.Post(srv, "/zm/update-ptr",
+		func(ctx fuego.ContextWithBody[ZMUpdatePTRRequest]) (*ZMUpdatePTRResponse, error) {
+			req, err := ctx.Body()
+			if err != nil {
+				return nil, err
+			}
+
+			mode := req.Mode
+			if mode == "" {
+				mode = zone.PTRUpdateReplaceAll
+			}
+			switch mode {
+			case zone.PTRUpdateAppend, zone.PTRUpdateReplace, zone.PTRUpdateReplaceAll:
+			default:
+				return nil, badRequestError(fmt.Sprintf("invalid mode: %s", mode))
+			}
+
+			addrs := make([]netip.Addr, 0, len(req.Addresses))
+			for _, a := range req.Addresses {
+				addr, err := netip.ParseAddr(a)
+				if err != nil {
+					return nil, badRequestError(fmt.Sprintf("invalid address %q: %v", a, err))
+				}
+				addrs = append(addrs, addr)
+			}
+			if len(addrs) == 0 {
+				return nil, badRequestError("no addresses provided")
+			}
+
+			changed, err := zctl.UpdatePTR(ctx, req.Target, addrs, mode)
+			if err != nil {
+				return nil, zoneErrorToHTTPError(err)
+			}
+
+			return &ZMUpdatePTRResponse{
+				Target:    req.Target,
+				Addresses: req.Addresses,
+				Mode:      mode,
+				Changed:   changed,
+			}, nil
+		},
+		option.Summary("update ptr records"),
+		option.Description("Update PTR records in matching reverse zones for the requested addresses, pointing them to the target host. The mode controls whether existing PTR records are appended, replaced or fully synced."),
 		option.Middleware(authMw),
 		option.Security(
 			openapi3.SecurityRequirement{

@@ -1,0 +1,14 @@
+$ORIGIN 8.b.d.0.1.0.0.2.ip6.arpa.
+$TTL 60
+; SOA Record
+@                                 IN   SOA        ns1.example.com. hostmaster.example.com. (
+                                                     1763822925   ; serial  Sat, 22 Nov 2025 14:48:45 UTC
+                                                     1H           ; refresh
+                                                     600          ; retry
+                                                     1W           ; expire
+                                                     1D           ; minimum
+                                                     )
+
+; NS Records
+@                                 IN   NS         ns1.example.com.
+@                                 IN   NS         ns2.example.com.

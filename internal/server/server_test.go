@@ -57,6 +57,11 @@ type fakeZoneController struct {
 	deleteErr  error
 	replaced   []fakeRRSetReplaceCall
 	deleted    []fakeRRSetDeleteCall
+	ptrTarget  string
+	ptrAddrs   []netip.Addr
+	ptrMode    zone.PTRUpdateMode
+	ptrChanged bool
+	ptrErr     error
 }
 
 func (f *fakeZoneController) ListZones(_ context.Context) ([]zone.ZoneSnapshot, error) {
@@ -125,6 +130,16 @@ func (f *fakeZoneController) DeleteRRSet(_ context.Context, zoneName, name, typ 
 
 func (f *fakeZoneController) ZMUpdateRecord(_ context.Context, _ string, _ string, _ int, _ []string) (changed bool, err error) {
 	return false, nil
+}
+
+func (f *fakeZoneController) UpdatePTR(_ context.Context, target string, addresses []netip.Addr, mode zone.PTRUpdateMode) (changed bool, err error) {
+	if f.ptrErr != nil {
+		return false, f.ptrErr
+	}
+	f.ptrTarget = target
+	f.ptrAddrs = addresses
+	f.ptrMode = mode
+	return f.ptrChanged, nil
 }
 
 func newTestServer(htp fakeHTPasswd, zctl *fakeZoneController) *fuego.Server {
@@ -410,6 +425,64 @@ func TestOpenAPISpecFormattingAndDescription(t *testing.T) {
 	assert.Equal(t, "application/x-yaml", yamlRec.Header().Get("Content-Type"))
 	assert.Contains(t, yamlRec.Body.String(), "title: Zoneomatic API")
 	assert.NotContains(t, yamlRec.Body.String(), "Fuego Cheatsheet")
+}
+
+func TestZMUpdatePTR(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+
+	run := func(t *testing.T, zctl *fakeZoneController, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		srv := newTestServer(htp, zctl)
+		req := httptest.NewRequest(http.MethodPost, "/zm/update-ptr", strings.NewReader(body))
+		req.SetBasicAuth("u", "p")
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("happy path", func(t *testing.T) {
+		zctl := &fakeZoneController{ptrChanged: true}
+		rec := run(t, zctl, `{"target":"hub.example.com.","addresses":["192.0.2.55","2001:db8::1"],"mode":"replace-all"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.JSONEq(t, `{"target":"hub.example.com.","addresses":["192.0.2.55","2001:db8::1"],"mode":"replace-all","changed":true}`, rec.Body.String())
+		assert.Equal(t, "hub.example.com.", zctl.ptrTarget)
+		assert.Equal(t, []netip.Addr{netip.MustParseAddr("192.0.2.55"), netip.MustParseAddr("2001:db8::1")}, zctl.ptrAddrs)
+		assert.Equal(t, zone.PTRUpdateReplaceAll, zctl.ptrMode)
+	})
+
+	t.Run("default mode is replace-all", func(t *testing.T) {
+		zctl := &fakeZoneController{}
+		rec := run(t, zctl, `{"target":"hub.example.com.","addresses":["192.0.2.55"]}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, zone.PTRUpdateReplaceAll, zctl.ptrMode)
+	})
+
+	t.Run("invalid address", func(t *testing.T) {
+		zctl := &fakeZoneController{}
+		rec := run(t, zctl, `{"target":"hub.example.com.","addresses":["not-an-ip"]}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		zctl := &fakeZoneController{}
+		rec := run(t, zctl, `{"target":"hub.example.com.","addresses":["192.0.2.55"],"mode":"banana"}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("zone not found mapped to 404", func(t *testing.T) {
+		zctl := &fakeZoneController{ptrErr: fmt.Errorf("wrapped: %w", zone.ErrZoneNotFound)}
+		rec := run(t, zctl, `{"target":"hub.example.com.","addresses":["192.0.2.55"]}`)
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	})
+
+	t.Run("unauthorized", func(t *testing.T) {
+		zctl := &fakeZoneController{}
+		srv := newTestServer(htp, zctl)
+		req := httptest.NewRequest(http.MethodPost, "/zm/update-ptr", strings.NewReader(`{"target":"hub.example.com.","addresses":["192.0.2.55"]}`))
+		rec := httptest.NewRecorder()
+		srv.Mux.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
 }
 
 func testPDNSAPIKey(user, password string) string {

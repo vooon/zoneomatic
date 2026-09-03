@@ -24,6 +24,7 @@ type Cli struct {
 	HTPasswdFile       string           `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
 	ZoneFiles          []string         `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
 	AcmeTTL            int              `name:"acme-ttl" default:"0" help:"TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL"`
+	DDNSManagePTR      bool             `name:"ddns-manage-ptr" help:"Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored"`
 	Debug              bool             `name:"debug" help:"Enable debug logging"`
 	Version            kong.VersionFlag `help:"Print version and exit"`
 
@@ -68,7 +69,7 @@ func Main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	zctl, err := zone.NewWithOptions([]zone.Option{zone.WithAcmeTTL(cli.AcmeTTL)}, cli.ZoneFiles...)
+	zctl, err := zone.NewWithOptions([]zone.Option{zone.WithAcmeTTL(cli.AcmeTTL), zone.WithDDNSManagePTR(cli.DDNSManagePTR)}, cli.ZoneFiles...)
 	kctx.FatalIfErrorf(err)
 
 	htp, err := htpasswd.NewFromFile(cli.HTPasswdFile)
