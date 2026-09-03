@@ -49,7 +49,26 @@ type Controller interface {
 	DeleteRRSet(ctx context.Context, zoneName, name, typ string) (changed bool, err error)
 	// ZMUpdateRecord replace record values
 	ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, values []string) (changed bool, err error)
+	// UpdatePTR updates PTR records for the given addresses in matching
+	// reverse zones, pointing them to the target host. addresses must contain
+	// at least one address; mode controls how the PTR records are managed.
+	UpdatePTR(ctx context.Context, target string, addresses []netip.Addr, mode PTRUpdateMode) (changed bool, err error)
 }
+
+// PTRUpdateMode controls how /zm/update-ptr manages PTR records for a target
+// host across the requested addresses.
+type PTRUpdateMode string
+
+const (
+	// PTRUpdateAppend only adds missing PTR records, never removes anything.
+	PTRUpdateAppend PTRUpdateMode = "append"
+	// PTRUpdateReplace sets the PTR record for each requested address in
+	// place (single record per address, keeping unrelated PTRs on the name).
+	PTRUpdateReplace PTRUpdateMode = "replace"
+	// PTRUpdateReplaceAll makes the PTR set of the target exactly match the
+	// requested addresses, removing stale PTR records pointing to the target.
+	PTRUpdateReplaceAll PTRUpdateMode = "replace-all"
+)
 
 type Matcher struct {
 	Domain []byte
@@ -70,6 +89,15 @@ func WithAcmeTTL(ttl int) Option {
 	}
 }
 
+// WithDDNSManagePTR enables updating PTR records in matching reverse zones on
+// DDNS address updates. Reverse zones are matched by the reversed address name
+// (in-addr.arpa / ip6.arpa); zones without a matching file are skipped.
+func WithDDNSManagePTR(enable bool) Option {
+	return func(d *DomainCtrl) {
+		d.ddnsPTR = enable
+	}
+}
+
 type File struct {
 	origin  string
 	path    string
@@ -81,6 +109,7 @@ type File struct {
 type DomainCtrl struct {
 	files   []*File
 	acmeTTL int
+	ddnsPTR bool
 }
 
 func New(zonefiles ...string) (Controller, error) {
@@ -138,7 +167,13 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 	if fl != nil {
 		span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
 		lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
-		return fl.UpdateDDNSAddress(ctx, domainDot, addrs)
+		if err = fl.UpdateDDNSAddress(ctx, domainDot, addrs); err != nil {
+			return err
+		}
+		if s.ddnsPTR {
+			s.updatePTRRecords(ctx, lg, domainDot, addrs)
+		}
+		return nil
 	}
 
 	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
@@ -352,11 +387,12 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	return
 }
 
-func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, anchor []byte, allowNew bool) (changed bool, err error) {
+func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, replaceAll bool, anchor []byte, allowNew bool) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_records")
 	span.SetAttributes(
 		attribute.String("zone.file", path.Base(s.path)),
 		attribute.Bool("zone.allow_new", allowNew),
+		attribute.Bool("zone.replace_all", replaceAll),
 		attribute.Int("zone.matcher_count", len(matchers)),
 		attribute.Int("zone.new_entry_count", len(values)),
 	)
@@ -389,10 +425,13 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 				lg.DebugContext(ctx, "First matching record found", "index", idx, "old_values", ent.ValuesStrings())
 				newEntries = append(newEntries, values...)
 				found = true
-			} else {
-				lg.DebugContext(ctx, "Remove matching record", "index", idx, "old_values", ent.ValuesStrings())
+				continue
 			}
-			continue
+			if replaceAll {
+				lg.DebugContext(ctx, "Remove duplicate matching record", "index", idx, "old_values", ent.ValuesStrings())
+				continue
+			}
+			lg.DebugContext(ctx, "Keep extra matching record", "index", idx, "old_values", ent.ValuesStrings())
 		}
 
 		newEntries = append(newEntries, ent)
@@ -485,6 +524,244 @@ func anchorInsertIndex(entries []zonefile.Entry, anchor []byte) int {
 	return acme
 }
 
+// UpdatePTR updates PTR records for the requested addresses in matching reverse
+// zones, pointing them to the target host. All addresses must have a matching
+// reverse zone, otherwise ErrZoneNotFound is returned; when target, addresses
+// set is empty or mode is invalid an error is returned without changes.
+func (s *DomainCtrl) UpdatePTR(ctx context.Context, target string, addresses []netip.Addr, mode PTRUpdateMode) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.update_ptr")
+	span.SetAttributes(
+		attribute.String("zone.ptr.target", target),
+		attribute.String("zone.ptr.mode", string(mode)),
+		attribute.Int("zone.addr_count", len(addresses)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	lg := slog.Default().With("target", target)
+
+	if len(addresses) == 0 {
+		return false, fmt.Errorf("no addresses provided for PTR update")
+	}
+	switch mode {
+	case PTRUpdateAppend, PTRUpdateReplace, PTRUpdateReplaceAll:
+	default:
+		return false, fmt.Errorf("invalid PTR update mode: %q", mode)
+	}
+
+	targetDot := target
+	if !strings.HasSuffix(targetDot, ".") {
+		targetDot += "."
+	}
+
+	revNames := make([]string, 0, len(addresses))
+	zones := make([]*File, 0, len(addresses))
+	for _, addr := range addresses {
+		name, err := dns.ReverseAddr(addr.String())
+		if err != nil {
+			return false, fmt.Errorf("failed to build reverse name for %s: %w", addr, err)
+		}
+		revNames = append(revNames, name)
+
+		fl := s.findZoneFile(ctx, lg.With("domain", name), name)
+		if fl == nil {
+			return false, fmt.Errorf("%w: %s", ErrZoneNotFound, name)
+		}
+		zones = append(zones, fl)
+	}
+
+	for i, name := range revNames {
+		c, err := zones[i].UpdatePTRAddress(ctx, name, targetDot, mode)
+		if err != nil {
+			lg.WarnContext(ctx, "Failed to update PTR record", "reverse", name, "zonefile", path.Base(zones[i].path), "error", err)
+			return changed, err
+		}
+		changed = changed || c
+	}
+
+	if mode == PTRUpdateReplaceAll {
+		c, err := s.removeStalePTR(ctx, lg, targetDot, revNames)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || c
+	}
+
+	return changed, nil
+}
+
+// updatePTRRecords is a best-effort PTR sync for DDNS address updates
+// (--ddns-manage-ptr): it updates PTR records for the current addresses and
+// removes stale PTR records pointing to the target, skipping addresses without
+// a matching reverse zone.
+func (s *DomainCtrl) updatePTRRecords(ctx context.Context, lg *slog.Logger, target string, addrs []netip.Addr) {
+	targetDot := target
+	if !strings.HasSuffix(targetDot, ".") {
+		targetDot += "."
+	}
+
+	revNames := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		name, err := dns.ReverseAddr(addr.String())
+		if err != nil {
+			lg.WarnContext(ctx, "Failed to build reverse name", "addr", addr, "error", err)
+			continue
+		}
+		revNames = append(revNames, name)
+
+		fl := s.findZoneFile(ctx, lg.With("domain", name), name)
+		if fl == nil {
+			lg.DebugContext(ctx, "No reverse zone for address", "reverse", name)
+			continue
+		}
+		if _, err := fl.UpdatePTRAddress(ctx, name, targetDot, PTRUpdateReplaceAll); err != nil {
+			lg.WarnContext(ctx, "Failed to update PTR record", "reverse", name, "zonefile", path.Base(fl.path), "error", err)
+			continue
+		}
+		lg.InfoContext(ctx, "PTR record updated", "zonefile", path.Base(fl.path), "reverse", name, "target", targetDot)
+	}
+
+	changed, err := s.removeStalePTR(ctx, lg, targetDot, revNames)
+	if err != nil {
+		lg.WarnContext(ctx, "Failed to clean stale PTR records", "target", targetDot, "error", err)
+		return
+	}
+	if changed {
+		lg.InfoContext(ctx, "Stale PTR records cleaned", "target", targetDot)
+	}
+}
+
+// removeStalePTR removes PTR records pointing to target in managed reverse
+// zones whose (absolute) name is not among keep.
+func (s *DomainCtrl) removeStalePTR(ctx context.Context, lg *slog.Logger, target string, keep []string) (changed bool, err error) {
+	keepSet := make(map[string]struct{}, len(keep))
+	for _, k := range keep {
+		keepSet[strings.ToLower(k)] = struct{}{}
+	}
+
+	for _, fl := range s.files {
+		if !isReverseZone(fl.origin) {
+			continue
+		}
+		names, err := fl.findPTRRecords(ctx, target)
+		if err != nil {
+			return changed, err
+		}
+		for _, name := range names {
+			if _, ok := keepSet[strings.ToLower(name)]; ok {
+				continue
+			}
+			c, err := fl.DeletePTRRecord(ctx, name, target)
+			if err != nil {
+				lg.WarnContext(ctx, "Failed to delete stale PTR record", "reverse", name, "zonefile", path.Base(fl.path), "error", err)
+				continue
+			}
+			changed = changed || c
+		}
+	}
+	return changed, nil
+}
+
+// isReverseZone reports whether the zone origin is a reverse zone
+// (in-addr.arpa or ip6.arpa tree).
+func isReverseZone(origin string) bool {
+	o := strings.ToLower(normalizeZoneName(origin))
+	return strings.HasSuffix(o, ".in-addr.arpa.") || strings.HasSuffix(o, ".ip6.arpa.")
+}
+
+// UpdatePTRAddress sets the PTR record for ptrName to target in the zone,
+// according to mode:
+//
+//   - append: insert the record only if it is missing, keeping existing PTRs;
+//   - replace: set a single PTR record in place, keeping unrelated PTRs on the
+//     same name;
+//   - replace-all: the PTR record set at that name becomes exactly {target}.
+func (s *File) UpdatePTRAddress(ctx context.Context, ptrName, target string, mode PTRUpdateMode) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.update_ptr")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", ptrName),
+		attribute.String("zone.ptr.mode", string(mode)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lg := s.lg.With("ptr_name", ptrName, "ptr_target", target, "mode", string(mode))
+
+	shortName := []byte(StripOrigin(ptrName, s.origin))
+
+	var matchers Matchers
+	replaceAll := true
+	switch mode {
+	case PTRUpdateAppend:
+		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR, Values: [][]byte{[]byte(target)}}}
+	case PTRUpdateReplace:
+		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR}}
+		replaceAll = false
+	case PTRUpdateReplaceAll:
+		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR}}
+	default:
+		return false, fmt.Errorf("invalid PTR update mode: %q", mode)
+	}
+
+	values, err := parseEntries(bytes.NewBufferString(fmt.Sprintf("\n%s IN PTR %s\n", shortName, target)))
+	if err != nil {
+		return false, err
+	}
+
+	return s.updateRecords(ctx, lg, matchers, values, replaceAll, shortName, true)
+}
+
+// DeletePTRRecord removes the PTR record for ptrName pointing to target.
+func (s *File) DeletePTRRecord(ctx context.Context, ptrName, target string) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lg := s.lg.With("ptr_name", ptrName, "ptr_target", target)
+
+	matchers := Matchers{{Domain: []byte(StripOrigin(ptrName, s.origin)), RRType: dns.TypePTR, Values: [][]byte{[]byte(target)}}}
+	return s.updateRecords(ctx, lg, matchers, nil, true, nil, false)
+}
+
+// findPTRRecords returns the absolute names of PTR records in the zone that
+// point to target.
+func (s *File) findPTRRecords(ctx context.Context, target string) (names []string, err error) {
+	zf, _, err := s.load()
+	if err != nil {
+		return nil, err
+	}
+
+	prevDomain := []byte{}
+	for _, ent := range zf.Entries() {
+		if ent.IsComment || ent.IsControl {
+			continue
+		}
+		d := ent.Domain()
+		if d == nil {
+			d = prevDomain
+		} else {
+			prevDomain = d
+		}
+		if ent.RRType() != dns.TypePTR {
+			continue
+		}
+		vals := ent.Values()
+		if len(vals) == 1 && bytes.Equal(vals[0], []byte(target)) {
+			names = append(names, absoluteRecordName(d, s.origin))
+		}
+	}
+	return names, nil
+}
+
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_ddns_address")
 	span.SetAttributes(
@@ -541,7 +818,7 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeAAAA})
 	}
 
-	_, err = s.updateRecords(ctx, lg, matchers, values, nil, true)
+	_, err = s.updateRecords(ctx, lg, matchers, values, true, nil, true)
 	if err != nil {
 		recordSpanError(span, err)
 		return err
@@ -601,7 +878,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 		},
 	}
 
-	_, err = s.updateRecords(ctx, lg, matchers, values, shortDomain, true)
+	_, err = s.updateRecords(ctx, lg, matchers, values, true, shortDomain, true)
 	if err != nil {
 		return err
 	}
@@ -657,7 +934,7 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, tt
 		},
 	}
 
-	return s.updateRecords(ctx, lg, matchers, values, nil, false)
+	return s.updateRecords(ctx, lg, matchers, values, true, nil, false)
 }
 
 func StripOrigin(name, origin string) string {

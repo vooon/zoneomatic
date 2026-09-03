@@ -24,6 +24,36 @@
 						"type": "string"
 					}
 				},
+				"required": [
+					"txt"
+				],
+				"type": "object"
+			},
+			"ErrorItem": {
+				"properties": {
+					"more": {
+						"additionalProperties": {
+							"description": "Additional information about the error"
+						},
+						"description": "Additional information about the error",
+						"type": [
+							"object",
+							"null"
+						]
+					},
+					"name": {
+						"description": "For example, name of the parameter that caused the error",
+						"type": "string"
+					},
+					"reason": {
+						"description": "Human readable error message",
+						"type": "string"
+					}
+				},
+				"required": [
+					"name",
+					"reason"
+				],
 				"type": "object"
 			},
 			"HTTPError": {
@@ -31,54 +61,31 @@
 				"properties": {
 					"detail": {
 						"description": "Human readable error message",
-						"nullable": true,
 						"type": "string"
 					},
 					"errors": {
 						"items": {
-							"nullable": true,
-							"properties": {
-								"more": {
-									"additionalProperties": {
-										"description": "Additional information about the error",
-										"nullable": true
-									},
-									"description": "Additional information about the error",
-									"nullable": true,
-									"type": "object"
-								},
-								"name": {
-									"description": "For example, name of the parameter that caused the error",
-									"type": "string"
-								},
-								"reason": {
-									"description": "Human readable error message",
-									"type": "string"
-								}
-							},
-							"type": "object"
+							"$ref": "#/components/schemas/ErrorItem"
 						},
-						"nullable": true,
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"instance": {
-						"nullable": true,
 						"type": "string"
 					},
 					"status": {
 						"description": "HTTP status code",
 						"example": 403,
-						"nullable": true,
 						"type": "integer"
 					},
 					"title": {
 						"description": "Short title of the error",
-						"nullable": true,
 						"type": "string"
 					},
 					"type": {
 						"description": "URL of the error type. Can be used to lookup the error in a documentation",
-						"nullable": true,
 						"type": "string"
 					}
 				},
@@ -95,7 +102,8 @@
 					}
 				},
 				"required": [
-					"fqdn"
+					"fqdn",
+					"value"
 				],
 				"type": "object"
 			},
@@ -109,6 +117,62 @@
 						"type": "string"
 					}
 				},
+				"required": [
+					"fqdn",
+					"value"
+				],
+				"type": "object"
+			},
+			"ZMUpdatePTRRequest": {
+				"description": "ZMUpdatePTRRequest schema",
+				"properties": {
+					"addresses": {
+						"items": {
+							"type": "string"
+						},
+						"type": "array"
+					},
+					"mode": {
+						"type": "string"
+					},
+					"target": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"addresses",
+					"target"
+				],
+				"type": "object"
+			},
+			"ZMUpdatePTRResponse": {
+				"description": "ZMUpdatePTRResponse schema",
+				"properties": {
+					"addresses": {
+						"items": {
+							"type": "string"
+						},
+						"type": [
+							"array",
+							"null"
+						]
+					},
+					"changed": {
+						"type": "boolean"
+					},
+					"mode": {
+						"type": "string"
+					},
+					"target": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"addresses",
+					"changed",
+					"mode",
+					"target"
+				],
 				"type": "object"
 			},
 			"ZMUpdateRequest": {
@@ -118,7 +182,6 @@
 						"type": "string"
 					},
 					"ttl": {
-						"nullable": true,
 						"type": "integer"
 					},
 					"type": {
@@ -126,8 +189,7 @@
 					},
 					"values": {
 						"items": {
-							"type": "string",
-							"x-fuego-required-marker": true
+							"type": "string"
 						},
 						"type": "array"
 					}
@@ -149,6 +211,10 @@
 						"type": "string"
 					}
 				},
+				"required": [
+					"changed",
+					"fqdn"
+				],
 				"type": "object"
 			},
 			"pdnsHTTPError": {
@@ -159,13 +225,17 @@
 					},
 					"errors": {
 						"items": {
-							"nullable": true,
 							"type": "string"
 						},
-						"nullable": true,
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					}
 				},
+				"required": [
+					"error"
+				],
 				"type": "object"
 			},
 			"pdnsNoContentResponse": {
@@ -176,48 +246,70 @@
 				"properties": {
 					"rrsets": {
 						"items": {
-							"properties": {
-								"changetype": {
-									"nullable": true,
-									"type": "string"
-								},
-								"comments": {
-									"items": {
-										"nullable": true
-									},
-									"nullable": true,
-									"type": "array"
-								},
-								"name": {
-									"type": "string"
-								},
-								"records": {
-									"items": {
-										"properties": {
-											"content": {
-												"type": "string"
-											},
-											"disabled": {
-												"type": "boolean"
-											}
-										},
-										"type": "object"
-									},
-									"type": "array"
-								},
-								"ttl": {
-									"nullable": true,
-									"type": "integer"
-								},
-								"type": {
-									"type": "string"
-								}
-							},
-							"type": "object"
+							"$ref": "#/components/schemas/pdnsRRSet"
 						},
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					}
 				},
+				"required": [
+					"rrsets"
+				],
+				"type": "object"
+			},
+			"pdnsRRSet": {
+				"properties": {
+					"changetype": {
+						"type": "string"
+					},
+					"comments": {
+						"items": {},
+						"type": [
+							"array",
+							"null"
+						]
+					},
+					"name": {
+						"type": "string"
+					},
+					"records": {
+						"items": {
+							"$ref": "#/components/schemas/pdnsRecord"
+						},
+						"type": [
+							"array",
+							"null"
+						]
+					},
+					"ttl": {
+						"type": "integer"
+					},
+					"type": {
+						"type": "string"
+					}
+				},
+				"required": [
+					"name",
+					"records",
+					"type"
+				],
+				"type": "object"
+			},
+			"pdnsRecord": {
+				"properties": {
+					"content": {
+						"type": "string"
+					},
+					"disabled": {
+						"type": "boolean"
+					}
+				},
+				"required": [
+					"content",
+					"disabled"
+				],
 				"type": "object"
 			},
 			"pdnsServer": {
@@ -245,6 +337,15 @@
 						"type": "string"
 					}
 				},
+				"required": [
+					"config_url",
+					"daemon_type",
+					"id",
+					"type",
+					"url",
+					"version",
+					"zones_url"
+				],
 				"type": "object"
 			},
 			"pdnsZone": {
@@ -257,7 +358,6 @@
 						"type": "boolean"
 					},
 					"catalog": {
-						"nullable": true,
 						"type": "string"
 					},
 					"dnssec": {
@@ -283,24 +383,31 @@
 						"items": {
 							"type": "string"
 						},
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"masters": {
 						"items": {
 							"type": "string"
 						},
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"name": {
 						"type": "string"
 					},
 					"nameservers": {
 						"items": {
-							"nullable": true,
 							"type": "string"
 						},
-						"nullable": true,
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"notified_serial": {
 						"maximum": 4294967295,
@@ -318,48 +425,12 @@
 					},
 					"rrsets": {
 						"items": {
-							"nullable": true,
-							"properties": {
-								"changetype": {
-									"nullable": true,
-									"type": "string"
-								},
-								"comments": {
-									"items": {
-										"nullable": true
-									},
-									"nullable": true,
-									"type": "array"
-								},
-								"name": {
-									"type": "string"
-								},
-								"records": {
-									"items": {
-										"properties": {
-											"content": {
-												"type": "string"
-											},
-											"disabled": {
-												"type": "boolean"
-											}
-										},
-										"type": "object"
-									},
-									"type": "array"
-								},
-								"ttl": {
-									"nullable": true,
-									"type": "integer"
-								},
-								"type": {
-									"type": "string"
-								}
-							},
-							"type": "object"
+							"$ref": "#/components/schemas/pdnsRRSet"
 						},
-						"nullable": true,
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"serial": {
 						"maximum": 4294967295,
@@ -370,10 +441,12 @@
 						"items": {
 							"type": "string"
 						},
-						"type": "array"
+						"type": [
+							"array",
+							"null"
+						]
 					},
 					"soa_edit_api": {
-						"nullable": true,
 						"type": "string"
 					},
 					"type": {
@@ -383,10 +456,29 @@
 						"type": "string"
 					},
 					"zone": {
-						"nullable": true,
 						"type": "string"
 					}
 				},
+				"required": [
+					"account",
+					"api_rectify",
+					"dnssec",
+					"edited_serial",
+					"id",
+					"kind",
+					"last_check",
+					"master_tsig_key_ids",
+					"masters",
+					"name",
+					"notified_serial",
+					"nsec3narrow",
+					"nsec3param",
+					"presigned",
+					"serial",
+					"slave_tsig_key_ids",
+					"type",
+					"url"
+				],
 				"type": "object"
 			},
 			"string": {
@@ -431,7 +523,7 @@
 	"paths": {
 		"/acme/update": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func4`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate ACME challenge TXT record",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func4`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate ACME challenge TXT record",
 				"operationId": "POST_/acme/update",
 				"requestBody": {
 					"content": {
@@ -1385,7 +1477,7 @@
 		},
 		"/cleanup": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func6`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nClean up ACME challenge TXT record using LEGO HTTP-REQ",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func6`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nClean up ACME challenge TXT record using LEGO HTTP-REQ",
 				"operationId": "POST_/cleanup",
 				"requestBody": {
 					"content": {
@@ -1581,7 +1673,7 @@
 		},
 		"/nic/update": {
 			"get": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func3`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate DDNS record",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func3`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate DDNS record",
 				"operationId": "GET_/nic/update",
 				"parameters": [
 					{
@@ -1682,7 +1774,7 @@
 		},
 		"/present": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func5`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nUpdate ACME challenge TXT record using LEGO HTTP-REQ",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func5`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate ACME challenge TXT record using LEGO HTTP-REQ",
 				"operationId": "POST_/present",
 				"requestBody": {
 					"content": {
@@ -1752,7 +1844,7 @@
 		},
 		"/zm/update": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func7`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func8`\n\n---\n\nReplace any existing DNS record value",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func7`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nReplace any existing DNS record value",
 				"operationId": "POST_/zm/update",
 				"parameters": [
 					{
@@ -1828,12 +1920,85 @@
 				],
 				"summary": "update any dns record"
 			}
+		},
+		"/zm/update-ptr": {
+			"post": {
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func8`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate PTR records in matching reverse zones for the requested addresses, pointing them to the target host. The mode controls whether existing PTR records are appended, replaced or fully synced.",
+				"operationId": "POST_/zm/update-ptr",
+				"parameters": [
+					{
+						"in": "header",
+						"name": "Accept",
+						"schema": {
+							"type": "string"
+						}
+					}
+				],
+				"requestBody": {
+					"content": {
+						"*/*": {
+							"schema": {
+								"$ref": "#/components/schemas/ZMUpdatePTRRequest"
+							}
+						}
+					},
+					"description": "Request body for server.ZMUpdatePTRRequest",
+					"required": true
+				},
+				"responses": {
+					"200": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/ZMUpdatePTRResponse"
+								}
+							},
+							"application/xml": {
+								"schema": {
+									"$ref": "#/components/schemas/ZMUpdatePTRResponse"
+								}
+							}
+						},
+						"description": "OK"
+					},
+					"400": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HTTPError"
+								}
+							},
+							"application/xml": {
+								"schema": {
+									"$ref": "#/components/schemas/HTTPError"
+								}
+							}
+						},
+						"description": "Bad Request _(validation or deserialization error)_"
+					},
+					"500": {
+						"content": {
+							"application/json": {
+								"schema": {
+									"$ref": "#/components/schemas/HTTPError"
+								}
+							},
+							"application/xml": {
+								"schema": {
+									"$ref": "#/components/schemas/HTTPError"
+								}
+							}
+						},
+						"description": "Internal Server Error _(panics)_"
+					}
+				},
+				"security": [
+					{
+						"basicAuth": []
+					}
+				],
+				"summary": "update ptr records"
+			}
 		}
-	},
-	"servers": [
-		{
-			"description": "local server",
-			"url": "http://127.0.0.1:9999"
-		}
-	]
+	}
 }

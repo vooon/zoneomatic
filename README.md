@@ -98,6 +98,7 @@ Flags:
   -p, --htpasswd=FILE                     Passwords file (bcrypt only) ($ZM_HTPASSWD)
   -z, --zone=FILE,...                     Zone files to update ($ZM_ZONE)
       --acme-ttl=0                        TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL ($ZM_ACME_TTL)
+      --ddns-manage-ptr                   Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored ($ZM_DDNS_MANAGE_PTR)
       --debug                             Enable debug logging ($ZM_DEBUG)
       --version                           Print version and exit ($ZM_VERSION)
       --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
@@ -191,6 +192,12 @@ See also: https://www.noip.com/integrate/request
 
 > [!NOTE]
 > If no `myip` nor `myipv6` provided, a client IP would be used.
+
+> [!NOTE]
+> With `--ddns-manage-ptr` the matching reverse zones (`in-addr.arpa` / `ip6.arpa`)
+> are updated too: each of the current addresses gets a single PTR record pointing
+> to the hostname, and any stale PTR pointing to it from other addresses is removed.
+> If no suitable reverse zone exists for an address, it is silently skipped.
 
 Response status codes:
 
@@ -356,6 +363,51 @@ JSON Object fields:
 
 > [!NOTE]
 > `POST /zm/update` updates existing records only. If no matching record exists, it returns an error.
+
+Response status codes:
+
+| Code | Meaning |
+|------|---------|
+| 200 | Updated |
+| 400 | Bad request |
+| 401 | Unauthorized |
+| 404 | Zone not found |
+| 500 | Unexpected server error |
+
+
+POST /zm/update-ptr
+-------------------
+
+Custom Zone-o-matic call.
+Update PTR records in matching reverse zones for the requested addresses, pointing them to the target host.
+Reverse names (`in-addr.arpa` / `ip6.arpa`) are calculated from the addresses automatically.
+
+Required HTTP Headers:
+
+| Name | Req | Description |
+|------|-----|-------------|
+| Authorization | Yes | HTTP Basic Auth |
+
+JSON Object fields:
+
+| Name | Req | Description | Example |
+|------|-----|-------------|---------|
+| target | Yes | Hostname the addresses should resolve back to. | `hub.example.com.` |
+| addresses | Yes | List of IP addresses to manage PTR records for. | `["192.0.2.55","2001:db8::1"]` |
+| mode | No | PTR update mode: `append`, `replace` or `replace-all`. Defaults to `replace-all`. | `replace-all` |
+
+`mode` semantics:
+
+- `append` — add a PTR record only if it is missing, never remove anything.
+- `replace` — set a single PTR record for each requested address in place, keeping
+  unrelated PTR records on the same name.
+- `replace-all` — fully sync the target: exactly one PTR record per requested
+  address, and any other PTR pointing to the target that is no longer in the
+  address list is removed (e.g. after the host moved to a new address).
+
+> [!NOTE]
+> Unlike `--ddns-manage-ptr`, this call returns `404` when no matching reverse
+> zone exists for one of the addresses.
 
 Response status codes:
 
