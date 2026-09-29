@@ -402,6 +402,116 @@ func TestFile_ZMUpdateRecord_TypeCaseInsensitive(t *testing.T) {
 	})
 }
 
+func TestFile_ApplyRecordUpdate(t *testing.T) {
+	t.Run("add is idempotent and appends after existing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+			changed, err := f.ApplyRecordUpdate(ctx, "loop", "A", 0, []string{"1.2.3.4"}, nil)
+			require.NoError(t, err)
+			assert.True(t, changed)
+
+			changed, err = f.ApplyRecordUpdate(ctx, "loop", "A", 0, []string{"1.2.3.4"}, nil)
+			require.NoError(t, err)
+			assert.False(t, changed)
+
+			snap, err := f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"127.0.0.1", "1.2.3.4"}, findRRSet(t, snap.RRsets, "loop.at.example.com.", "A").Records)
+		})
+	})
+
+	t.Run("remove drops only the matching value", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+			changed, err := f.ApplyRecordUpdate(ctx, "loop", "A", 0, nil, []string{"127.0.0.1"})
+			require.NoError(t, err)
+			assert.True(t, changed)
+
+			snap, err := f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.False(t, hasRRSet(snap.RRsets, "loop.at.example.com.", "A"))
+
+			// removing a missing value is a no-op
+			changed, err = f.ApplyRecordUpdate(ctx, "loop", "A", 0, nil, []string{"127.0.0.1"})
+			require.NoError(t, err)
+			assert.False(t, changed)
+		})
+	})
+
+	t.Run("add then remove token round-trip", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+			_, err := f.ApplyRecordUpdate(ctx, "_acme-challenge.zot", "TXT", 0, []string{"tok-a"}, nil)
+			require.NoError(t, err)
+			_, err = f.ApplyRecordUpdate(ctx, "_acme-challenge.zot", "TXT", 0, []string{"tok-b"}, nil)
+			require.NoError(t, err)
+
+			snap, err := f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs", "tok-a", "tok-b"}, findRRSet(t, snap.RRsets, "_acme-challenge.zot.at.example.com.", "TXT").Records)
+
+			_, err = f.ApplyRecordUpdate(ctx, "_acme-challenge.zot", "TXT", 0, nil, []string{"tok-a"})
+			require.NoError(t, err)
+
+			snap, err = f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs", "tok-b"}, findRRSet(t, snap.RRsets, "_acme-challenge.zot.at.example.com.", "TXT").Records)
+		})
+	})
+
+	t.Run("matches continuation lines", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := context.TODO()
+			f := newZoneTemp(t, "./testdata/acme-apex-at.zone")
+
+			// Replace the seeded placeholder, then append a second token. The
+			// second one lands on a continuation line (implicit owner name).
+			require.NoError(t, f.UpdateACMEChallenge(ctx, "_acme-challenge", "tok-1", EmptyPlaceholder))
+			require.NoError(t, f.UpdateACMEChallenge(ctx, "_acme-challenge", "tok-2", EmptyPlaceholder))
+
+			snap, err := f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"tok-1", "tok-2"}, findRRSet(t, snap.RRsets, "_acme-challenge.at.example.com.", "TXT").Records)
+
+			// ApplyRecordUpdate must find and remove the continuation-line value.
+			changed, err := f.ApplyRecordUpdate(ctx, "_acme-challenge", "TXT", 0, nil, []string{"tok-2"})
+			require.NoError(t, err)
+			assert.True(t, changed)
+
+			snap, err = f.Snapshot(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, []string{"tok-1"}, findRRSet(t, snap.RRsets, "_acme-challenge.at.example.com.", "TXT").Records)
+		})
+	})
+}
+
+func TestFile_RemoveRecordName(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.TODO()
+		f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+		changed, err := f.RemoveRecordName(ctx, "loop")
+		require.NoError(t, err)
+		assert.True(t, changed)
+
+		snap, err := f.Snapshot(ctx)
+		require.NoError(t, err)
+		assert.False(t, hasRRSet(snap.RRsets, "loop.at.example.com.", "A"))
+		assert.False(t, hasRRSet(snap.RRsets, "loop.at.example.com.", "AAAA"))
+
+		// idempotent
+		changed, err = f.RemoveRecordName(ctx, "loop")
+		require.NoError(t, err)
+		assert.False(t, changed)
+	})
+}
+
 func newZoneTemp(t *testing.T, file string) *File {
 	t.Helper()
 	return newZoneTempWithOpts(t, file)

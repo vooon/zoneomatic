@@ -47,6 +47,24 @@ type fakeRRSetDeleteCall struct {
 	typ      string
 }
 
+type fakeApplyCall struct {
+	domain string
+	typ    string
+	ttl    int
+	add    []string
+	remove []string
+}
+
+type fakeRemoveNameCall struct {
+	domain string
+}
+
+type fakeACMECall struct {
+	domain   string
+	newToken string
+	oldToken string
+}
+
 type fakeZoneController struct {
 	lastDomain string
 	lastAddrs  []netip.Addr
@@ -62,6 +80,12 @@ type fakeZoneController struct {
 	ptrMode    zone.PTRUpdateMode
 	ptrChanged bool
 	ptrErr     error
+
+	acmeCalls  []fakeACMECall
+	acmeErr    error
+	applyCalls []fakeApplyCall
+	applyErr   error
+	removeName []fakeRemoveNameCall
 }
 
 func (f *fakeZoneController) ListZones(_ context.Context) ([]zone.ZoneSnapshot, error) {
@@ -94,7 +118,11 @@ func (f *fakeZoneController) UpdateDDNSAddress(_ context.Context, domain string,
 	return nil
 }
 
-func (f *fakeZoneController) UpdateACMEChallenge(_ context.Context, _ string, _, _ string) error {
+func (f *fakeZoneController) UpdateACMEChallenge(_ context.Context, domain string, newToken, oldToken string) error {
+	if f.acmeErr != nil {
+		return f.acmeErr
+	}
+	f.acmeCalls = append(f.acmeCalls, fakeACMECall{domain: domain, newToken: newToken, oldToken: oldToken})
 	return nil
 }
 
@@ -140,6 +168,25 @@ func (f *fakeZoneController) UpdatePTR(_ context.Context, target string, address
 	f.ptrAddrs = addresses
 	f.ptrMode = mode
 	return f.ptrChanged, nil
+}
+
+func (f *fakeZoneController) ApplyRecordUpdate(_ context.Context, domain string, typ string, ttl int, add []string, remove []string) (changed bool, err error) {
+	if f.applyErr != nil {
+		return false, f.applyErr
+	}
+	f.applyCalls = append(f.applyCalls, fakeApplyCall{
+		domain: domain,
+		typ:    typ,
+		ttl:    ttl,
+		add:    append([]string(nil), add...),
+		remove: append([]string(nil), remove...),
+	})
+	return true, nil
+}
+
+func (f *fakeZoneController) RemoveRecordName(_ context.Context, domain string) (changed bool, err error) {
+	f.removeName = append(f.removeName, fakeRemoveNameCall{domain: domain})
+	return true, nil
 }
 
 func newTestServer(htp fakeHTPasswd, zctl *fakeZoneController) *fuego.Server {
