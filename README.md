@@ -99,6 +99,12 @@ Flags:
   -z, --zone=FILE,...                     Zone files to update ($ZM_ZONE)
       --acme-ttl=0                        TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL ($ZM_ACME_TTL)
       --ddns-manage-ptr                   Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored ($ZM_DDNS_MANAGE_PTR)
+      --rfc2136-acme-listen=STRING          Listen address for RFC2136 dynamic updates (host:port); empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
+      --rfc2136-acme-tsig-file=FILE         BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_ACME_TSIG_FILE)
+      --rfc2136-acme-allow=CIDR,...         Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
+      --rfc2136-update-listen=STRING        Listen address for RFC2136 dynamic updates (host:port); empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
+      --rfc2136-update-tsig-file=FILE       BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_UPDATE_TSIG_FILE)
+      --rfc2136-update-allow=CIDR,...       Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
       --debug                             Enable debug logging ($ZM_DEBUG)
       --version                           Print version and exit ($ZM_VERSION)
       --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
@@ -430,6 +436,135 @@ Response status codes:
 | Code | Meaning |
 |------|---------|
 | 200 | Healthy |
+
+
+RFC2136 dynamic updates
+-----------------------
+
+Zone-o-matic can accept standard RFC2136 (DNS UPDATE) messages, so tools such as
+`nsupdate` and cert-manager's built-in `rfc2136` solver can update records
+directly, without any extra webhook component.
+
+Two independent listeners can be enabled; each one is off unless its listen
+address is set and requires a TSIG key file:
+
+| Listener | Flag | Scope |
+|----------|------|-------|
+| ACME dns-01 | `--rfc2136-acme-listen` | only `_acme-challenge.*` TXT records |
+| Full update | `--rfc2136-update-listen` | any record in configured zones |
+
+Both listeners serve UDP and TCP on the same address.
+
+### TSIG keys
+
+Keys are read from a BIND-style key file, exactly as produced by `tsig-keygen`
+(part of BIND). Multiple keys may be present in one file.
+
+```bash
+tsig-keygen -a hmac-sha256 certmanager.example.com > /etc/zoneomatic/tsig.conf
+```
+
+```text
+key "certmanager.example.com" {
+	algorithm hmac-sha256;
+	secret "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ=";
+};
+```
+
+The algorithm is pinned per key: a client that signs with a different algorithm
+is rejected.
+
+### Example: full update listener
+
+```bash
+zoneomatic \
+  --htpasswd ./htpasswd \
+  --zone ./example.com.zone \
+  --rfc2136-update-listen 10.0.0.1:15353 \
+  --rfc2136-update-tsig-file /etc/zoneomatic/tsig.conf \
+  --rfc2136-update-allow 10.0.0.0/8 \
+  --acme-ttl 30
+```
+
+With `--acme-ttl 30`, records written through this listener inherit the packet
+TTL, but are capped to 30 seconds when the packet TTL is larger (or absent).
+
+`nsupdate` example:
+
+```bash
+nsupdate -k /etc/zoneomatic/tsig.conf
+> server 10.0.0.1 15353
+> zone example.com
+> update add host.example.com 60 A 192.0.2.10
+> send
+```
+
+### Example: cert-manager (DNS-01 via rfc2136)
+
+cert-manager's `rfc2136` solver runs inside the controller, so no webhook
+deployment is needed. Point it at the ACME listener and, optionally, restrict
+the propagation self-check to your authoritative nameserver:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zoneomatic-tsig
+  namespace: cert-manager
+stringData:
+  tsig-key: YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ=
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-rfc2136
+spec:
+  acme:
+    email: admin@example.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-rfc2136-account-key
+    solvers:
+      - dns01:
+          rfc2136:
+            nameserver: 10.0.0.1:15353
+            tsigKeyName: certmanager.example.com
+            tsigAlgorithm: HMACSHA256
+            tsigSecretSecretRef:
+              name: zoneomatic-tsig
+              key: tsig-key
+          # Optional: query the authoritative server for the self-check
+          # instead of public resolvers.
+          # nameservers:
+          #   - 10.0.0.2:53
+```
+
+The `tsig-key` value is the base64 secret from the key file (the `secret "..."`
+content, without quotes).
+
+### Security notes
+
+RFC2136 with TSIG provides **authentication and integrity, but not
+confidentiality** — the update payload (record names and values, including ACME
+tokens) is sent in the clear. It also has **no protection against replay** beyond
+the TSIG fudge window (300 seconds by default), which requires synchronized
+clocks.
+
+Therefore:
+
+- **Bind to a private interface** (e.g. a VPN/WireGuard address) and do not
+  expose these listeners to the public internet. Use `--rfc2136-*-allow` as a
+  defense-in-depth allowlist.
+- Keep clocks synchronized (NTP); large skew causes `BADTIME` failures.
+- Prefer SHA-2 algorithms (`hmac-sha256`/`hmac-sha512`); the server pins the
+  algorithm per key and rejects mismatches.
+- The blast radius is limited: only pre-configured `--zone` files are writable,
+  and the ACME listener additionally accepts only `_acme-challenge.*` TXT
+  records.
+- Use separate keys for the ACME and full-update listeners, and rotate by
+  adding a new key and pointing clients at it.
+- Treat the TSIG key file (and any Kubernetes Secret holding it) as sensitive: a
+  leaked key allows updates within that key's scope.
 
 
 dnsfmt behavior

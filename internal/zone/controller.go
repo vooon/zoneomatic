@@ -53,6 +53,14 @@ type Controller interface {
 	// reverse zones, pointing them to the target host. addresses must contain
 	// at least one address; mode controls how the PTR records are managed.
 	UpdatePTR(ctx context.Context, target string, addresses []netip.Addr, mode PTRUpdateMode) (changed bool, err error)
+	// ApplyRecordUpdate adds and/or removes individual values of an existing
+	// RRSet, preserving the position of the RRSet in the zone file. Adding a
+	// value that already exists is a no-op; removing a missing value is also a
+	// no-op. Used by the RFC2136 update listener.
+	ApplyRecordUpdate(ctx context.Context, domain string, typ string, ttl int, add []string, remove []string) (changed bool, err error)
+	// RemoveRecordName removes all RRsets that belong to a record name.
+	// Used by the RFC2136 update listener for ClassANY + TypeANY deletes.
+	RemoveRecordName(ctx context.Context, domain string) (changed bool, err error)
 }
 
 // PTRUpdateMode controls how /zm/update-ptr manages PTR records for a target
@@ -243,6 +251,65 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 
 	err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
 	return false, err
+}
+
+func (s *DomainCtrl) ApplyRecordUpdate(ctx context.Context, domain string, typ string, ttl int, add []string, remove []string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.apply_record_update")
+	span.SetAttributes(
+		attribute.String("zone.domain", domain),
+		attribute.String("dns.rr.type", typ),
+		attribute.Int("zone.add_count", len(add)),
+		attribute.Int("zone.remove_count", len(remove)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	lg := slog.Default().With("domain", domain)
+
+	domainDot := domain
+	if !strings.HasSuffix(domainDot, ".") {
+		domainDot += "."
+	}
+
+	fl := s.findZoneFile(ctx, lg, domainDot)
+	if fl == nil {
+		err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+		return false, err
+	}
+
+	span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
+	lg.InfoContext(ctx, "Zone file found", "zonefile", path.Base(fl.path))
+
+	return fl.ApplyRecordUpdate(ctx, domainDot, typ, ttl, add, remove)
+}
+
+func (s *DomainCtrl) RemoveRecordName(ctx context.Context, domain string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.domain_ctrl.remove_record_name")
+	span.SetAttributes(attribute.String("zone.domain", domain))
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	lg := slog.Default().With("domain", domain)
+
+	domainDot := domain
+	if !strings.HasSuffix(domainDot, ".") {
+		domainDot += "."
+	}
+
+	fl := s.findZoneFile(ctx, lg, domainDot)
+	if fl == nil {
+		err = fmt.Errorf("%w: %s", ErrZoneNotFound, domain)
+		return false, err
+	}
+
+	span.SetAttributes(attribute.String("zone.file", path.Base(fl.path)))
+	return fl.RemoveRecordName(ctx, domainDot)
 }
 
 func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDot string) *File {
@@ -464,7 +531,12 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 	}
 	span.SetAttributes(attribute.Int("zone.result_entry_count", len(newEntries)))
 
-	// 3. Check if it is changed
+	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
+}
+
+// saveIfChanged compares the old and new entry lists and atomically rewrites
+// the zone file when they differ. Callers must hold s.mu.
+func (s *File) saveIfChanged(ctx context.Context, lg *slog.Logger, oldEntries, newEntries []zonefile.Entry) (changed bool, err error) {
 	changed = !slices.EqualFunc(oldEntries, newEntries, func(e1, e2 zonefile.Entry) bool {
 		return e1.Equal(e2)
 	})
@@ -474,11 +546,8 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		return
 	}
 
-	// 4. Update file
 	uglyBuf := bytes.NewBuffer(nil)
 	PrintEntries(newEntries, uglyBuf)
-
-	// fmt.Println(string(uglyBuf.String()))
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
@@ -935,6 +1004,140 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, tt
 	}
 
 	return s.updateRecords(ctx, lg, matchers, values, true, nil, false)
+}
+
+// ApplyRecordUpdate adds and/or removes individual values of an existing RRSet.
+// The position of the RRSet in the zone file is preserved: additions are
+// inserted after the last existing value of the same name/type and removals
+// only drop the matching value entries. Adding an already present value and
+// removing a missing value are no-ops.
+func (s *File) ApplyRecordUpdate(ctx context.Context, domain string, typ string, ttl int, add []string, remove []string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.apply_record_update")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", domain),
+		attribute.String("dns.rr.type", typ),
+		attribute.Int("zone.add_count", len(add)),
+		attribute.Int("zone.remove_count", len(remove)),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lg := s.lg.With("domain", domain, "rr_type", typ, "add", add, "remove", remove)
+
+	typ = strings.ToUpper(strings.TrimSpace(typ))
+	rrType, ok := dns.StringToType[typ]
+	if !ok {
+		return false, fmt.Errorf("unknown rrtype: %s", typ)
+	}
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+
+	zf, _, err := s.load()
+	if err != nil {
+		return false, err
+	}
+
+	removeSet := make(map[string]struct{}, len(remove))
+	for _, v := range remove {
+		removeSet[strings.TrimSpace(v)] = struct{}{}
+	}
+
+	oldEntries := zf.Entries()
+	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
+
+	existing := make(map[string]struct{})
+	lastMatch := -1
+
+	for _, ent := range oldEntries {
+		if !ent.IsComment && !ent.IsControl &&
+			dnsNamesEqual(ent.Domain(), shortDomain) && bytes.Equal(ent.Type(), []byte(typ)) {
+			val := strings.Join(ent.ValuesStrings(), "")
+			if _, drop := removeSet[strings.TrimSpace(val)]; drop {
+				continue
+			}
+			existing[strings.TrimSpace(val)] = struct{}{}
+			newEntries = append(newEntries, ent)
+			lastMatch = len(newEntries) - 1
+			continue
+		}
+
+		newEntries = append(newEntries, ent)
+	}
+
+	added := make([]zonefile.Entry, 0, len(add))
+	for _, val := range add {
+		if _, ok := existing[strings.TrimSpace(val)]; ok {
+			continue
+		}
+
+		entbuf := bytes.NewBuffer(nil)
+		if ttl > 0 {
+			_, _ = fmt.Fprintf(entbuf, "\n%s %d IN %s %s\n", shortDomain, ttl, typ, formatRecordValue(rrType, val))
+		} else {
+			_, _ = fmt.Fprintf(entbuf, "\n%s IN %s %s\n", shortDomain, typ, formatRecordValue(rrType, val))
+		}
+
+		ents, err := parseEntries(entbuf)
+		if err != nil {
+			return false, err
+		}
+		added = append(added, ents...)
+		existing[strings.TrimSpace(val)] = struct{}{}
+	}
+
+	if len(added) > 0 {
+		if lastMatch >= 0 {
+			newEntries = slices.Insert(newEntries, lastMatch+1, added...)
+		} else {
+			newEntries = append(newEntries, added...)
+		}
+	}
+
+	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
+}
+
+// RemoveRecordName removes all RRsets that belong to a record name.
+func (s *File) RemoveRecordName(ctx context.Context, domain string) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.remove_record_name")
+	span.SetAttributes(
+		attribute.String("zone.file", path.Base(s.path)),
+		attribute.String("zone.domain", domain),
+	)
+	defer func() {
+		span.SetAttributes(attribute.Bool("zone.changed", changed))
+		recordSpanError(span, err)
+		span.End()
+	}()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	lg := s.lg.With("domain", domain)
+
+	shortDomain := []byte(StripOrigin(domain, s.origin))
+
+	zf, _, err := s.load()
+	if err != nil {
+		return false, err
+	}
+
+	oldEntries := zf.Entries()
+	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
+	for _, ent := range oldEntries {
+		if !ent.IsComment && !ent.IsControl && dnsNamesEqual(ent.Domain(), shortDomain) {
+			continue
+		}
+		newEntries = append(newEntries, ent)
+	}
+
+	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
 }
 
 func StripOrigin(name, origin string) string {

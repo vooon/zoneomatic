@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/miekg/dns"
 )
 
 const e2eAPIKey = "e2e-secret"
@@ -113,7 +115,171 @@ func TestZoneomaticPDNSE2E(t *testing.T) {
 	})
 }
 
+func TestZoneomaticRFC2136E2E(t *testing.T) {
+	tsigPath := filepath.Join(t.TempDir(), "tsig.conf")
+	require.NoError(t, os.WriteFile(tsigPath, []byte(`
+key "certmanager.example.com" {
+	algorithm hmac-sha256;
+	secret "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ=";
+};
+`), 0600))
+
+	dnsAddr := freeListenAddr(t)
+
+	srv := startZoneomaticWithArgs(t,
+		"--rfc2136-acme-listen", dnsAddr,
+		"--rfc2136-acme-tsig-file", tsigPath,
+		"--rfc2136-acme-allow", "127.0.0.0/8",
+	)
+
+	client := &dns.Client{
+		Net:        "udp",
+		TsigSecret: map[string]string{"certmanager.example.com.": "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ="},
+	}
+
+	tok := "e2e-token-abcdefghijklmnopqrstuvwxyz012345678"
+	m := new(dns.Msg)
+	m.SetUpdate("at.example.com.")
+	m.Insert([]dns.RR{&dns.TXT{
+		Hdr: dns.RR_Header{Name: "_acme-challenge.e2e.at.example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+		Txt: []string{tok},
+	}})
+	m.SetTsig("certmanager.example.com.", dns.HmacSHA256, 300, time.Now().Unix())
+
+	resp, _, err := client.Exchange(m, dnsAddr)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, dns.RcodeSuccess, resp.Rcode, "rcode=%s", dns.RcodeToString[resp.Rcode])
+
+	require.Eventually(t, func() bool {
+		buf, err := os.ReadFile(srv.zonePath)
+		if err != nil {
+			return false
+		}
+		return strings.Contains(string(buf), tok)
+	}, 10*time.Second, 100*time.Millisecond, "zone file was not updated")
+
+	// Unsigned update must be rejected.
+	unsigned := new(dns.Msg)
+	unsigned.SetUpdate("at.example.com.")
+	unsigned.Insert([]dns.RR{&dns.TXT{
+		Hdr: dns.RR_Header{Name: "_acme-challenge.evil.at.example.com.", Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+		Txt: []string{"evil"},
+	}})
+
+	resp, _, err = (&dns.Client{Net: "udp"}).Exchange(unsigned, dnsAddr)
+	require.NoError(t, err)
+	assert.Equal(t, dns.RcodeNotAuth, resp.Rcode)
+}
+
+func TestZoneomaticRFC2136NsupdateE2E(t *testing.T) {
+	// Cross-implementation check against BIND's nsupdate, which must be
+	// installed. It exercises the same protocol as cert-manager's solver but
+	// with a completely independent implementation.
+	nsupdate, err := exec.LookPath("nsupdate")
+	if err != nil {
+		t.Skip("nsupdate not installed")
+	}
+
+	tsigPath := filepath.Join(t.TempDir(), "tsig.conf")
+	secret := "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ="
+	require.NoError(t, os.WriteFile(tsigPath, []byte(
+		"key \"certmanager.example.com\" {\n\talgorithm hmac-sha256;\n\tsecret \""+secret+"\";\n};\n"), 0600))
+
+	dnsAddr := freeListenAddr(t)
+	host, port, err := net.SplitHostPort(dnsAddr)
+	require.NoError(t, err)
+
+	srv := startZoneomaticWithArgs(t,
+		"--rfc2136-acme-listen", dnsAddr,
+		"--rfc2136-acme-tsig-file", tsigPath,
+		"--rfc2136-acme-allow", "127.0.0.0/8",
+	)
+
+	run := func(t *testing.T, script string) {
+		t.Helper()
+		cmd := exec.Command(nsupdate, "-k", tsigPath)
+		cmd.Stdin = strings.NewReader(script)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "nsupdate failed: %s", out)
+	}
+
+	tok := "nsupdate-token-abcdefghijklmnopqrstuvwxyz012345"
+	run(t, fmt.Sprintf("server %s %s\nzone at.example.com\nupdate add _acme-challenge.nsupdate.at.example.com 60 TXT \"%s\"\nsend\n", host, port, tok))
+
+	require.Eventually(t, func() bool {
+		buf, err := os.ReadFile(srv.zonePath)
+		return err == nil && strings.Contains(string(buf), tok)
+	}, 10*time.Second, 100*time.Millisecond, "zone file was not updated by nsupdate")
+
+	// nsupdate must also be able to remove the value again.
+	run(t, fmt.Sprintf("server %s %s\nzone at.example.com\nupdate delete _acme-challenge.nsupdate.at.example.com TXT \"%s\"\nsend\n", host, port, tok))
+
+	require.Eventually(t, func() bool {
+		buf, err := os.ReadFile(srv.zonePath)
+		return err == nil && !strings.Contains(string(buf), tok)
+	}, 10*time.Second, 100*time.Millisecond, "zone file was not cleaned up by nsupdate")
+}
+
+func TestZoneomaticRFC2136KnsupdateE2E(t *testing.T) {
+	// Cross-implementation check against Knot DNS's knsupdate.
+	knsupdate, err := exec.LookPath("knsupdate")
+	if err != nil {
+		t.Skip("knsupdate not installed")
+	}
+
+	const keyName = "certmanager.example.com"
+	const secret = "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ="
+
+	tsigPath := filepath.Join(t.TempDir(), "tsig.conf")
+	require.NoError(t, os.WriteFile(tsigPath, []byte(
+		"key \""+keyName+"\" {\n\talgorithm hmac-sha256;\n\tsecret \""+secret+"\";\n};\n"), 0600))
+
+	dnsAddr := freeListenAddr(t)
+	host, port, err := net.SplitHostPort(dnsAddr)
+	require.NoError(t, err)
+
+	srv := startZoneomaticWithArgs(t,
+		"--rfc2136-acme-listen", dnsAddr,
+		"--rfc2136-acme-tsig-file", tsigPath,
+		"--rfc2136-acme-allow", "127.0.0.0/8",
+	)
+
+	tok := "knot-token-abcdefghijklmnopqrstuvwxyz0123456789"
+	script := fmt.Sprintf("server %s %s\nzone at.example.com\nupdate add _acme-challenge.knot.at.example.com 60 TXT \"%s\"\nsend\n", host, port, tok)
+
+	cmd := exec.Command(knsupdate, "-y", "hmac-sha256:"+keyName+":"+secret)
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "knsupdate failed: %s", out)
+
+	require.Eventually(t, func() bool {
+		buf, err := os.ReadFile(srv.zonePath)
+		return err == nil && strings.Contains(string(buf), tok)
+	}, 10*time.Second, 100*time.Millisecond, "zone file was not updated by knsupdate")
+}
+
+func TestZoneomaticRFC2136DisabledByDefault(t *testing.T) {
+	srv := startZoneomatic(t)
+
+	// No DNS listener should be present; the HTTP server is up.
+	resp, err := http.Get(srv.baseURL + "/health")
+	require.NoError(t, err)
+	defer resp.Body.Close() // nolint:errcheck
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
 func startZoneomatic(t *testing.T) *runningServer {
+	t.Helper()
+	return startZoneomaticWithArgs(t)
+}
+
+func startZoneomaticWithArgs(t *testing.T, extraArgs ...string) *runningServer {
+	t.Helper()
+	return startZoneomaticConfigured(t, nil, extraArgs...)
+}
+
+func startZoneomaticConfigured(t *testing.T, extraEnv []string, extraArgs ...string) *runningServer {
 	t.Helper()
 
 	repoRoot := repositoryRoot(t)
@@ -122,14 +288,18 @@ func startZoneomatic(t *testing.T) *runningServer {
 	listenAddr := freeListenAddr(t)
 	baseURL := "http://" + listenAddr
 
-	logs := bytes.NewBuffer(nil)
-	cmd := exec.Command(zoneomaticBinary(t),
+	args := []string{
 		"--htpasswd", htpasswdPath,
 		"--zone", zonePath,
 		"--listen", listenAddr,
 		"--debug",
-	)
+	}
+	args = append(args, extraArgs...)
+
+	logs := bytes.NewBuffer(nil)
+	cmd := exec.Command(zoneomaticBinary(t), args...)
 	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
 

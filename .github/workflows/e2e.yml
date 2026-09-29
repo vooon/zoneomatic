@@ -29,5 +29,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install DNS clients
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bind9-dnsutils knot-dnsutils
+
       - name: Run e2e tests
         run: go test -tags=e2e -v -timeout=5m -count=1 ./tests/e2e/...

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,7 +29,19 @@ type Cli struct {
 	Debug              bool             `name:"debug" help:"Enable debug logging"`
 	Version            kong.VersionFlag `help:"Print version and exit"`
 
+	RFC2136ACME RFC2136ListenerConfig `embed:"" prefix:"rfc2136-acme-" envprefix:"ZM_RFC2136_ACME_"`
+	RFC2136Upd  RFC2136ListenerConfig `embed:"" prefix:"rfc2136-update-" envprefix:"ZM_RFC2136_UPDATE_"`
+
 	OTEL OTelConfig `embed:"" prefix:"otel-"`
+}
+
+// RFC2136ListenerConfig holds the flags for one RFC2136 listener. The same
+// options are embedded twice: for the ACME dns-01 listener and for the
+// full-zone update listener.
+type RFC2136ListenerConfig struct {
+	Listen   string         `name:"listen" env:"LISTEN" help:"Listen address (host:port); empty disables the listener"`
+	TSIGFile string         `name:"tsig-file" env:"TSIG_FILE" type:"existingfile" placeholder:"FILE" help:"BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set"`
+	Allow    []netip.Prefix `name:"allow" env:"ALLOW" sep:"," placeholder:"CIDR" help:"Allowed client CIDRs (comma-separated or repeated); empty allows all"`
 }
 
 func Main() {
@@ -82,6 +95,22 @@ func Main() {
 
 	RegisterEndpoints(srv, htp, zctl)
 
+	acmeSrv, err := StartRFC2136(RFC2136Config{
+		Listen:   cli.RFC2136ACME.Listen,
+		TSIGFile: cli.RFC2136ACME.TSIGFile,
+		Allow:    cli.RFC2136ACME.Allow,
+		ACMEOnly: true,
+	}, zctl)
+	kctx.FatalIfErrorf(err)
+
+	updateSrv, err := StartRFC2136(RFC2136Config{
+		Listen:   cli.RFC2136Upd.Listen,
+		TSIGFile: cli.RFC2136Upd.TSIGFile,
+		Allow:    cli.RFC2136Upd.Allow,
+		MaxTTL:   cli.AcmeTTL,
+	}, zctl)
+	kctx.FatalIfErrorf(err)
+
 	go func() {
 		err := srv.Run()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -94,6 +123,13 @@ func Main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+
+	if err := acmeSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("RFC2136 ACME listener shutdown failed", "error", err)
+	}
+	if err := updateSrv.Shutdown(shutdownCtx); err != nil {
+		slog.Error("RFC2136 update listener shutdown failed", "error", err)
+	}
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("Server shutdown failed", "error", err)
