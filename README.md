@@ -105,6 +105,7 @@ Flags:
       --rfc2136-update-listen=STRING        Listen address for RFC2136 dynamic updates (host:port); empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
       --rfc2136-update-tsig-file=FILE       BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_UPDATE_TSIG_FILE)
       --rfc2136-update-allow=CIDR,...       Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
+      --rfc2136-update-max-ttl=0            Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL ($ZM_RFC2136_UPDATE_MAX_TTL)
       --debug                             Enable debug logging ($ZM_DEBUG)
       --version                           Print version and exit ($ZM_VERSION)
       --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
@@ -483,11 +484,12 @@ zoneomatic \
   --rfc2136-update-listen 10.0.0.1:15353 \
   --rfc2136-update-tsig-file /etc/zoneomatic/tsig.conf \
   --rfc2136-update-allow 10.0.0.0/8 \
-  --acme-ttl 30
+  --rfc2136-update-max-ttl 300
 ```
 
-With `--acme-ttl 30`, records written through this listener inherit the packet
-TTL, but are capped to 30 seconds when the packet TTL is larger (or absent).
+With `--rfc2136-update-max-ttl 300`, records written through this listener
+inherit the packet TTL, but are capped to 300 seconds when the packet TTL is
+larger (or absent). By default (`0`) the packet TTL is honored as-is.
 
 `nsupdate` example:
 

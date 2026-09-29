@@ -32,6 +32,8 @@ type Cli struct {
 	RFC2136ACME RFC2136ListenerConfig `embed:"" prefix:"rfc2136-acme-" envprefix:"ZM_RFC2136_ACME_"`
 	RFC2136Upd  RFC2136ListenerConfig `embed:"" prefix:"rfc2136-update-" envprefix:"ZM_RFC2136_UPDATE_"`
 
+	RFC2136UpdateMaxTTL int `name:"rfc2136-update-max-ttl" env:"ZM_RFC2136_UPDATE_MAX_TTL" default:"0" help:"Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL"`
+
 	OTEL OTelConfig `embed:"" prefix:"otel-"`
 }
 
@@ -107,7 +109,7 @@ func Main() {
 		Listen:   cli.RFC2136Upd.Listen,
 		TSIGFile: cli.RFC2136Upd.TSIGFile,
 		Allow:    cli.RFC2136Upd.Allow,
-		MaxTTL:   cli.AcmeTTL,
+		MaxTTL:   cli.RFC2136UpdateMaxTTL,
 	}, zctl)
 	kctx.FatalIfErrorf(err)
 

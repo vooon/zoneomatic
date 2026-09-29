@@ -31,7 +31,7 @@ type RFC2136Config struct {
 	// ACMEOnly restricts the listener to _acme-challenge.* TXT updates and maps
 	// them onto the ACME challenge controller.
 	ACMEOnly bool
-	// MaxTTL caps the effective TTL of records written through a non-ACME
+	// MaxTTL caps the effective TTL of records written through the full-update
 	// listener when it is set and smaller than the record TTL.
 	MaxTTL int
 }

@@ -259,6 +259,47 @@ func TestZoneomaticRFC2136KnsupdateE2E(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond, "zone file was not updated by knsupdate")
 }
 
+func TestZoneomaticRFC2136UpdateListenerE2E(t *testing.T) {
+	nsupdate, err := exec.LookPath("nsupdate")
+	if err != nil {
+		t.Skip("nsupdate not installed")
+	}
+
+	tsigPath := filepath.Join(t.TempDir(), "tsig.conf")
+	secret := "YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ="
+	require.NoError(t, os.WriteFile(tsigPath, []byte(
+		"key \"certmanager.example.com\" {\n\talgorithm hmac-sha256;\n\tsecret \""+secret+"\";\n};\n"), 0600))
+
+	dnsAddr := freeListenAddr(t)
+	host, port, err := net.SplitHostPort(dnsAddr)
+	require.NoError(t, err)
+
+	srv := startZoneomaticWithArgs(t,
+		"--rfc2136-update-listen", dnsAddr,
+		"--rfc2136-update-tsig-file", tsigPath,
+		"--rfc2136-update-max-ttl", "30",
+	)
+
+	// Packet TTL 300 must be capped to the configured 30.
+	cmd := exec.Command(nsupdate, "-k", tsigPath)
+	cmd.Stdin = strings.NewReader(fmt.Sprintf(
+		"server %s %s\nzone at.example.com\nupdate add www.at.example.com 300 A 192.0.2.10\nsend\n", host, port))
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "nsupdate failed: %s", out)
+
+	require.Eventually(t, func() bool {
+		buf, err := os.ReadFile(srv.zonePath)
+		if err != nil {
+			return false
+		}
+		return strings.Contains(string(buf), "www") && strings.Contains(string(buf), "192.0.2.10")
+	}, 10*time.Second, 100*time.Millisecond, "zone file was not updated")
+
+	buf, err := os.ReadFile(srv.zonePath)
+	require.NoError(t, err)
+	assert.Regexp(t, `www\s+30\s+IN\s+A\s+192\.0\.2\.10`, string(buf), "expected TTL to be capped to 30")
+}
+
 func TestZoneomaticRFC2136DisabledByDefault(t *testing.T) {
 	srv := startZoneomatic(t)
 
