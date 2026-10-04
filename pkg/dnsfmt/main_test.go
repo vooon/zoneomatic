@@ -19,15 +19,15 @@ example.org.		IN	NS  ns.example.org.
 	}
 	if out.String() != `$TTL 6H
 $ORIGIN example.org.
-@               IN   SOA        ns miek.miek.nl. (
-                                   1282630067   ; serial  Tue, 24 Aug 2010 06:07:47 UTC
-                                   4H           ; refresh
-                                   1H           ; retry
-                                   1W           ; expire
-                                   2H           ; minimum
-                                   )
-                IN   NS         ns
-                IN   NS         ns
+@ IN SOA ns miek.miek.nl. (
+    1282630067 ; serial  Tue, 24 Aug 2010 06:07:47 UTC
+    4H         ; refresh
+    1H         ; retry
+    7D         ; expire
+    7200       ; minimum
+)
+  IN NS  ns
+  IN NS  ns.example.org.
 ` {
 		t.Fatalf("failed to properly reformat\n%s\n", out.String())
 	}
@@ -81,28 +81,31 @@ nlgids          IN      CNAME   a
 		t.Fatalf("unexpected reformat error: %v", err)
 	}
 	if out.String() != `$ORIGIN miek.nl.
-@                    IN   SOA        linode miek (
-                                        1282630063   ; serial  Tue, 24 Aug 2010 06:07:43 UTC ; Serial
-                                        4H           ; Refresh
-                                        1H           ; Retry
-                                        1W           ; Expire
-                                        4H           ; Negative Cache TTL
-                                        )
-                     IN   NS         linode.atoom.net.
-                     IN   MX         10 aspmx3.googlemail.com.
-                     IN   A          127.0.0.1
+@      IN SOA   linode.miek.nl. miek.miek.nl. (
+    1282630063 ; serial  Tue, 24 Aug 2010 06:07:43 UTC ; Serial
+    4H         ; Refresh
+    1H         ; Retry
+    7D         ; Expire
+    4H         ; Negative Cache TTL
+)
+       IN NS    linode.atoom.net.
 
-a                    IN   A          127.0.0.1
-                     IN   AAAA       1::53
+       IN MX    10 aspmx3.googlemail.com.
 
-mmark                IN   CNAME      a
-bot                  IN   CNAME      a
-www                  IN   CNAME      a
+       IN A     127.0.0.1
 
-go.dns               IN   TXT        "Hello DNS developer!"
+a      IN A     127.0.0.1
+       IN AAAA  1::53
 
-x                    IN   CNAME      a
-nlgids               IN   CNAME      a
+mmark  IN CNAME a
+
+bot    IN CNAME a
+
+www    IN CNAME a
+go.dns IN TXT   "Hello DNS developer!"
+x      IN CNAME a
+
+nlgids IN CNAME a
 ` {
 		t.Fatalf("failed to properly reformat\n%s\n", out.String())
 	}
@@ -128,7 +131,7 @@ func TestFormatTXTMultiKeepsParenthesizedForm(t *testing.T) {
 	}
 
 	got := out.String()
-	if !bytes.Contains([]byte(got), []byte("TXT        (\n")) {
+	if !bytes.Contains([]byte(got), []byte("TXT (\n")) {
 		t.Fatalf("expected parenthesized TXT form, got:\n%s", got)
 	}
 	if !bytes.Contains([]byte(got), []byte(`"abc"`)) || !bytes.Contains([]byte(got), []byte(`"def"`)) {
@@ -146,10 +149,10 @@ _25._tcp.example.org. TLSA 3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a
 	}
 
 	got := out.String()
-	if bytes.Contains([]byte(got), []byte("TLSA       3 1 1 (\n")) {
+	if bytes.Contains([]byte(got), []byte("TLSA 3 1 1 (\n")) {
 		t.Fatalf("expected one-line TLSA form, got:\n%s", got)
 	}
-	if !bytes.Contains([]byte(got), []byte("TLSA       3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059")) {
+	if !bytes.Contains([]byte(got), []byte("IN TLSA 3 1 1 bbe71be3a546c68e3b802ab0d5e2417ae6c4c795b76250a7c6965914f57d5059\n")) {
 		t.Fatalf("expected full one-line TLSA value, got:\n%s", got)
 	}
 }

@@ -37,3 +37,15 @@ func TestStripOrigin(t *testing.T) {
 		}
 	}
 }
+
+func TestNameEqual(t *testing.T) {
+	if !NameEqual([]byte("WWW.Example.COM."), []byte("www.example.com.")) {
+		t.Error("ASCII case must be ignored")
+	}
+	if NameEqual([]byte("\xcd."), []byte("\xf0.")) {
+		t.Error("different non-ASCII bytes must not be equal")
+	}
+	if NameEqual([]byte("Ä."), []byte("ä.")) {
+		t.Error("non-ASCII letters are compared exactly")
+	}
+}
