@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"regexp"
+	"slices"
 
 	"github.com/miekg/dns"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
@@ -22,7 +24,9 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 	single := map[string]int{}
 	longestname := 0
 	prevname := []byte{}
-	for _, e := range zf.Entries() {
+	entries := zf.Entries()
+	for i := range entries {
+		e := &entries[i]
 		if e.IsComment {
 			continue
 		}
@@ -131,7 +135,13 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 			continue
 		}
 		if e.IsControl {
-			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" ")))
+			values := e.RawValues()
+			if bytes.Equal(e.Command(), []byte("$ORIGIN")) && len(values) > 0 {
+				// The origin is used as absolute; a missing trailing dot
+				// would make other parsers read it relative to the zone.
+				values = append([][]byte{zonefile.Fqdn(values[0])}, values[1:]...)
+			}
+			fmt.Fprintf(w, "%s %s%s\n", e.Command(), bytes.Join(values, []byte(" ")), trailing(e.Comments()))
 			prevcom = false
 			prevname = []byte{}
 			prevtype = []byte{}
@@ -174,84 +184,85 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 		}
 		fmt.Fprintf(w, "   %-8s", e.Type())
 
-		// Specicial handling for certain RR types
+		// Specicial handling for certain RR types. Comments are kept next to
+		// the value they follow.
 		values := e.Values()
+		raw := e.RawValues()
+		head, after := e.ValueComments()
 		switch e.RRType() {
-		case dns.TypeTXT:
-			if len(values) <= 1 {
-				fmt.Fprintf(w, "%s%s\n", Space3, Quote(values[0]))
-				break
+		case dns.TypeTXT, dns.TypeSPF:
+			quoted := make([][]byte, len(values))
+			for i, v := range values {
+				quoted[i] = []byte(Quote(v))
 			}
-
-			fmt.Fprintf(w, "%s(\n", Space3)
-			for _, v := range values {
-				fmt.Fprintf(w, "%-*s%s%s\n", longestname+Indent, " ", Space3, Quote(v))
-			}
-			closeBrace(w, longestname)
+			writeValues(w, longestname, quoted, head, after, len(values) > 1)
 
 		case dns.TypeCAA:
-			fmt.Fprintf(w, Space3)
-			space := ""
+			rendered := make([][]byte, len(values))
 			for i, v := range values {
 				if i < 2 {
-					fmt.Fprintf(w, "%s%s", space, v)
+					rendered[i] = v
 				} else {
-					fmt.Fprintf(w, "%s%s", space, Quote(v))
+					rendered[i] = []byte(Quote(v))
 				}
-				space = " "
 			}
-			fmt.Fprintln(w)
+			writeValues(w, longestname, rendered, head, after, false)
 
 		case dns.TypeSOA:
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:2], []byte(" ")))
+			if len(values) != 7 {
+				return fmt.Errorf("malformed SOA RR: %v", values)
+			}
+			fmt.Fprintf(w, "%s%s (%s\n", Space3, bytes.Join(raw[:2], []byte(" ")), trailing(append(head, slices.Concat(after[:2]...)...)))
 			for i, v := range values[2:] {
+				comment := ""
+				if len(after[i+2]) > 0 {
+					comment = " " + string(bytes.Join(after[i+2], []byte(" ")))
+				}
 				if i == 0 {
 					if incrementSerial {
 						v = Increase(v)
 					}
-					humandate := SerialToHuman(v)
-					fmt.Fprintf(w, "%-*s%s%-13s%s%s\n", longestname+Indent, " ", Space3, v, soacomment[i], humandate)
+					// Always show the serial as a date; keep the user's own
+					// comment after it.
+					comment = " " + soacomment[0] + SerialToHuman(v)
+					for _, c := range after[2] {
+						if user := UserComment(c); len(user) > 0 {
+							comment += " " + string(user)
+						}
+					}
 				} else {
-					fmt.Fprintf(w, "%-*s%s%-13s%s\n", longestname+Indent, " ", Space3, bytes.ToUpper(TimeToHumanByte(v)), soacomment[i])
+					v = bytes.ToUpper(TimeToHumanByte(v))
+					if comment == "" || isGeneratedSOAComment(after[i+2], i) {
+						comment = " " + soacomment[i]
+					}
 				}
+				fmt.Fprintf(w, "%-*s%s%-12s%s\n", longestname+Indent, " ", Space3, v, comment)
 			}
 			closeBrace(w, longestname)
 
-		case dns.TypeTLSA:
-			fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(values, []byte(" ")))
-
-		case dns.TypeCDS, dns.TypeDS:
-			fallthrough
-		case dns.TypeCDNSKEY:
-			fallthrough
-		case dns.TypeDNSKEY:
-			if len(values) < 4 {
+		case dns.TypeCDS, dns.TypeDS, dns.TypeCDNSKEY, dns.TypeDNSKEY, dns.TypeRRSIG:
+			n := 3
+			if e.RRType() == dns.TypeRRSIG {
+				n = 8
+			}
+			if len(values) < n+1 {
 				return fmt.Errorf("malformed RR: %v", values)
 			}
-			all := bytes.Join(values[3:], nil)
-			pieces := Split(all, 55)
-			if len(pieces) == 1 {
-				fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(e.Values(), []byte(" ")))
+			comments := trailing(append(head, slices.Concat(after...)...))
+			pieces := Split(bytes.Join(values[n:], nil), 55)
+			if len(pieces) == 1 && e.RRType() != dns.TypeRRSIG {
+				fmt.Fprintf(w, "%s%s%s\n", Space3, bytes.Join(raw, []byte(" ")), comments)
 				break
 			}
 
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:3], []byte(" ")))
-			for _, p := range pieces {
-				fmt.Fprintf(w, "%-*s%s%-13s\n", longestname+Indent, " ", Space3, p)
-			}
-			closeBrace(w, longestname)
-
-		case dns.TypeRRSIG:
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:8], []byte(" ")))
-			all := bytes.Join(values[8:], nil)
-			pieces := Split(all, 55)
+			fmt.Fprintf(w, "%s%s (%s\n", Space3, bytes.Join(raw[:n], []byte(" ")), comments)
 			for _, p := range pieces {
 				fmt.Fprintf(w, "%-*s%s%-13s\n", longestname+Indent, " ", Space3, p)
 			}
 			closeBrace(w, longestname)
 
 		default:
-			fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(values, []byte(" ")))
+			writeValues(w, longestname, raw, head, after, false)
 		}
 
 		if len(e.Domain()) > 0 {
@@ -268,6 +279,60 @@ const (
 )
 
 var soacomment = []string{"; serial", "; refresh", "; retry", "; expire", "; minimum"}
+
+// isGeneratedSOAComment reports whether the comments of SOA field i are the
+// label dnsfmt writes itself (and should regenerate), not the user's.
+func isGeneratedSOAComment(comments [][]byte, i int) bool {
+	return len(comments) == 1 && string(comments[0]) == soacomment[i]
+}
+
+// generatedSerialRE matches the serial comment dnsfmt writes: "; serial"
+// optionally followed by the serial as a date.
+var generatedSerialRE = regexp.MustCompile(`^;\s*serial(?:\s+[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} UTC)?`)
+
+// UserComment returns the part of a comment that was not generated by dnsfmt:
+// for the SOA serial comment, whatever follows "; serial <date>". Other
+// comments are returned unchanged. The result may be empty.
+func UserComment(c []byte) []byte {
+	if loc := generatedSerialRE.FindIndex(c); loc != nil {
+		return bytes.TrimSpace(c[loc[1]:])
+	}
+	return c
+}
+
+// trailing renders comments for the end of a line (joined, as only one
+// comment fits on a line), or "" when there are none.
+func trailing(comments [][]byte) string {
+	if len(comments) == 0 {
+		return ""
+	}
+	return "   " + string(bytes.Join(comments, []byte(" ")))
+}
+
+// writeValues writes record values after the type. They stay on one line
+// unless multi is set or a comment precedes a value other than the last;
+// then each value gets its own line inside ( ), followed by its comments.
+func writeValues(w io.Writer, longestname int, values [][]byte, head [][]byte, after [][][]byte, multi bool) {
+	for i := 0; i+1 < len(after); i++ {
+		multi = multi || len(after[i]) > 0
+	}
+	multi = multi || len(head) > 0
+
+	if !multi {
+		var last [][]byte
+		if len(after) > 0 {
+			last = after[len(after)-1]
+		}
+		fmt.Fprintf(w, "%s%s%s\n", Space3, bytes.Join(values, []byte(" ")), trailing(last))
+		return
+	}
+
+	fmt.Fprintf(w, "%s(%s\n", Space3, trailing(head))
+	for i, v := range values {
+		fmt.Fprintf(w, "%-*s%s%s%s\n", longestname+Indent, " ", Space3, v, trailing(after[i]))
+	}
+	closeBrace(w, longestname)
+}
 
 func closeBrace(w io.Writer, longestname int) {
 	fmt.Fprintf(w, "%-*s)\n", longestname+Indent+3, " ")
@@ -286,15 +351,23 @@ func Split(buf []byte, lim int) [][]byte {
 	return chunks
 }
 
+// StripOrigin makes name relative to origin, or "@" for the origin itself.
+// Names outside the origin are returned unchanged; the suffix must match on
+// a label boundary (case-insensitively), so "myexample.com." is not taken
+// as part of "example.com.".
 func StripOrigin(origin, name []byte) []byte {
-	if len(origin) > 0 && bytes.HasSuffix(name, origin) {
-		// remove origin plus dot.
-		l := len(name)
-		if l == len(origin) {
-			return []byte("@")
-		} else {
-			return name[:l-len(origin)-1]
-		}
+	if len(origin) == 0 || len(name) < len(origin) {
+		return name
 	}
-	return name
+	l := len(name) - len(origin)
+	if !bytes.EqualFold(name[l:], origin) {
+		return name
+	}
+	if l == 0 {
+		return []byte("@")
+	}
+	if name[l-1] != '.' || (l >= 2 && name[l-2] == '\\') {
+		return name
+	}
+	return name[:l-1]
 }

@@ -82,11 +82,11 @@ nlgids          IN      CNAME   a
 	}
 	if out.String() != `$ORIGIN miek.nl.
 @                    IN   SOA        linode miek (
-                                        1282630063   ; serial  Tue, 24 Aug 2010 06:07:43 UTC
-                                        4H           ; refresh
-                                        1H           ; retry
-                                        1W           ; expire
-                                        4H           ; minimum
+                                        1282630063   ; serial  Tue, 24 Aug 2010 06:07:43 UTC ; Serial
+                                        4H           ; Refresh
+                                        1H           ; Retry
+                                        1W           ; Expire
+                                        4H           ; Negative Cache TTL
                                         )
                      IN   NS         linode.atoom.net.
                      IN   MX         10 aspmx3.googlemail.com.
