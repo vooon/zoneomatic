@@ -101,3 +101,18 @@ func TestSetDomain_DoesNotAliasCopies(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_UnclosedParen(t *testing.T) {
+	if _, err := Load([]byte("@ IN SOA a b (1 2 3 4 5\n")); err == nil {
+		t.Error("expected parsing error for unclosed (")
+	}
+}
+
+func TestLoad_LineEndings(t *testing.T) {
+	if _, err := Load([]byte("a IN A 192.0.2.1\r\nb IN A 192.0.2.2\r\n")); err != nil {
+		t.Errorf("CRLF must be accepted: %v", err)
+	}
+	if _, err := Load([]byte("a IN A 192.0.2.1\rb IN A 192.0.2.2\n")); err == nil {
+		t.Error("expected parsing error for a lone CR")
+	}
+}

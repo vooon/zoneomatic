@@ -95,6 +95,11 @@ func (e Entry) Comments() (ret [][]byte) {
 	return
 }
 
+// IsBlank reports whether the entry is an empty (or whitespace-only) line.
+func (e Entry) IsBlank() bool {
+	return e.IsComment && len(e.find(useComment)) == 0
+}
+
 // ValueComments returns the comments of the entry by position: head holds the
 // comments before the first value (e.g. after an opening parenthesis), and
 // after[i] the comments that follow value i, up to the next value.
@@ -219,6 +224,19 @@ func Load(data []byte) (r *Zonefile, e *ParsingError) {
 		line := bytes.Count(data[:i], []byte{'\n'})
 		return nil, &ParsingError{msg: "NUL byte in zone file", LineNo: line + 1}
 	}
+	// CRLF line endings are fine, a lone CR is not: parsers disagree on it
+	// (a line break here, ignored by miekg/dns).
+	for i := bytes.IndexByte(data, '\r'); i >= 0; {
+		if i+1 >= len(data) || data[i+1] != '\n' {
+			line := bytes.Count(data[:i], []byte{'\n'})
+			return nil, &ParsingError{msg: "CR without LF in zone file", LineNo: line + 1}
+		}
+		next := bytes.IndexByte(data[i+1:], '\r')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
 
 	r = &Zonefile{}
 	l := lex(data)
@@ -244,7 +262,11 @@ func Load(data []byte) (r *Zonefile, e *ParsingError) {
 		}
 
 		if t.typ == tokenNewline && len(line) == 0 {
-			// or empty line
+			// Empty line: keep one blank entry for a run of them, so
+			// printers can keep the grouping of the file.
+			if n := len(r.entries); n > 0 && !r.entries[n-1].IsBlank() {
+				r.entries = append(r.entries, Entry{IsComment: true, tokens: []taggedToken{{t, useOther}}})
+			}
 			continue
 		}
 
@@ -335,8 +357,9 @@ func parseLine(line []token) (e Entry, err *ParsingError) {
 		}
 	}
 	if iFirstItem == -1 {
-		// A line without items is a comment line, even when indented.
-		e.IsComment = slices.ContainsFunc(e.tokens, func(tt taggedToken) bool { return tt.t.typ == tokenComment })
+		// A line without items is a comment line (even when indented), or a
+		// blank line when it has no comment either.
+		e.IsComment = true
 		return
 	}
 
@@ -642,6 +665,9 @@ func (l *lexer) acceptUntil(valid string) {
 func lexInitial(l *lexer) lexerState {
 	switch c := l.next(); {
 	case c == eof:
+		if l.inGroup {
+			return l.errorf("unclosed (")
+		}
 		return nil
 	case c == ' ' || c == '\t' || (l.inGroup && (c == '\n' || c == '\r')):
 		return lexSpace
