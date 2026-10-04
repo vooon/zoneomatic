@@ -31,3 +31,7 @@ jobs:
         id: go
       - name: Test
         run: go test -v ./...
+      - name: Test pkg/dnsfmt (nested module)
+        run: |
+          go work init . ./pkg/dnsfmt
+          go test -v ./pkg/dnsfmt/...
