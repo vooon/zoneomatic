@@ -153,6 +153,9 @@ func (z *Zonefile) Entries() (r []Entry) {
 func Load(data []byte) (r *Zonefile, e *ParsingError) {
 	r = &Zonefile{}
 	l := lex(data)
+	// On an early return the lexer goroutine would block forever on its
+	// next send; drain the remaining tokens so it can finish.
+	defer l.drain()
 
 	// lex the zonefile and group tokens by line
 	var line []token
@@ -390,21 +393,25 @@ func (t token) Value() []byte {
 			continue
 		}
 		if precedingSlash && '0' <= c && c <= '9' {
-			c2, e2 := ibuf.ReadByte()
-			c3, e3 := ibuf.ReadByte()
-			if e2 != nil || e3 != nil || '0' > c2 || '0' > c3 ||
-				'9' < c2 || '9' < c3 {
-				panic("malformed value")
+			// \DDD decimal escape. A malformed one (not three digits, or
+			// above 255) is treated like any other escaped character.
+			rest := ibuf.Bytes()
+			if len(rest) >= 2 && isDigit(rest[0]) && isDigit(rest[1]) {
+				if v, err := strconv.Atoi(string([]byte{c, rest[0], rest[1]})); err == nil && v <= 255 {
+					ibuf.Next(2)
+					obuf.WriteByte(byte(v))
+					precedingSlash = false
+					continue
+				}
 			}
-			v, _ := strconv.Atoi(string([]byte{c, c2, c3}))
-			obuf.WriteByte(byte(v))
-			continue
 		}
 		precedingSlash = false
 		obuf.WriteByte(c)
 	}
 	return obuf.Bytes()
 }
+
+func isDigit(c byte) bool { return '0' <= c && c <= '9' }
 
 // Lexer
 type tokenType int
@@ -456,6 +463,19 @@ type lexer struct {
 }
 
 func (l *lexer) run() {
+	defer close(l.tokens)
+	// Report lexer bugs as a parsing error instead of crashing the process:
+	// the panic would happen in this goroutine, out of the caller's reach.
+	defer func() {
+		if r := recover(); r != nil {
+			l.tokens <- token{
+				typ:    tokenError,
+				val:    fmt.Appendf(nil, "lexer failure: %v", r),
+				lineno: l.lineno, colno: l.colno,
+			}
+		}
+	}()
+
 	for l.state = lexInitial; l.state != nil; {
 		l.state = l.state(l)
 	}
@@ -463,7 +483,14 @@ func (l *lexer) run() {
 		l.errorf("could not tokenize whole file")
 	}
 	l.emit(tokenEOF)
-	close(l.tokens)
+}
+
+// drain consumes the remaining tokens in the background.
+func (l *lexer) drain() {
+	go func() {
+		for range l.tokens { //nolint:revive
+		}
+	}()
 }
 
 func (l *lexer) emit(t tokenType) {
@@ -595,6 +622,8 @@ func lexQuotedItem(l *lexer) lexerState {
 	precedingSlash := false
 	for {
 		switch c := l.next(); {
+		case c == eof && l.pos > len(l.buf):
+			return l.errorf("unterminated quoted string")
 		case c == '"' && !precedingSlash:
 			l.emit(tokenQuotedItem)
 			return lexInitial
