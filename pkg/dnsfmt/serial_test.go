@@ -38,3 +38,10 @@ func TestIncreaseEpoch(t *testing.T) {
 		t.Errorf("expected %d, got %s", now+11, got)
 	}
 }
+
+func TestIncreaseDate(t *testing.T) {
+	// YYYYMMDDnn serials are incremented, not replaced by the current time.
+	if got := string(Increase([]byte("2024041300"))); got != "2024041301" {
+		t.Errorf("expected 2024041301, got %s", got)
+	}
+}

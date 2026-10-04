@@ -5,19 +5,19 @@ import (
 	"time"
 )
 
-const Year5 = time.Duration(24*time.Hour*365) * 5
-const Year15 = time.Duration(24*time.Hour*365) * 15
-
+// isEpoch reports whether a serial is a Unix timestamp rather than the
+// YYYYMMDDnn date convention (RFC 1912). Only serials that form a plausible
+// date (year 1990-2099, valid month and day) are taken as dates. This does
+// not depend on the current time, unlike a "close to now" window, which
+// misclassifies old epoch serials.
 func isEpoch(i int64) bool {
-	now := time.Now()
-	t := time.Unix(i, 0)
-	if now.Sub(t) > Year15 {
-		return false
+	if i < 1990010100 || i > 2099123199 {
+		return true
 	}
-	if t.Sub(now) > Year5 {
-		return false
-	}
-	return true
+	date := i / 100
+	year, month, day := int(date/10000), time.Month(date/100%100), int(date%100)
+	t := time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+	return t.Year() != year || t.Month() != month || t.Day() != day
 }
 
 func Increase(s []byte) []byte {
