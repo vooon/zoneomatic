@@ -2,11 +2,14 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -376,4 +379,137 @@ func writeKeyFile(path, name, algo, secret string) error {
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// newRealZone returns a handler backed by the real zone controller over a
+// temporary copy of the at.example.com and mx.example.com test zones.
+func newRealZone(t *testing.T, acmeOnly bool) (*rfc2136Handler, string) {
+	t.Helper()
+	dir := t.TempDir()
+	var paths []string
+	for _, f := range []string{"at.example.com.zone", "mx.example.com.zone"} {
+		b, err := os.ReadFile("../zone/testdata/" + f)
+		require.NoError(t, err)
+		p := filepath.Join(dir, f)
+		require.NoError(t, os.WriteFile(p, b, 0o644))
+		paths = append(paths, p)
+	}
+	zctl, err := zone.New(paths...)
+	require.NoError(t, err)
+	return &rfc2136Handler{zctl: zctl, acmeOnly: acmeOnly, lg: discardLogger()}, dir
+}
+
+// wireUpdate builds an update the way a client sends it: packed and
+// unpacked, so TXT strings carry miekg/dns presentation escaping.
+func wireUpdate(t *testing.T, zoneName string, build func(m *dns.Msg)) *dns.Msg {
+	t.Helper()
+	m := new(dns.Msg)
+	m.SetUpdate(zoneName)
+	build(m)
+	buf, err := m.Pack()
+	require.NoError(t, err)
+	out := new(dns.Msg)
+	require.NoError(t, out.Unpack(buf))
+	return out
+}
+
+// zoneTXT parses a zone file with miekg/dns and returns the TXT values of name.
+func zoneTXT(t *testing.T, path, origin, name string) [][]string {
+	t.Helper()
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer f.Close() // nolint:errcheck
+
+	var ret [][]string
+	zp := dns.NewZoneParser(f, origin, "")
+	for rr, ok := zp.Next(); ok; rr, ok = zp.Next() {
+		if txt, isTXT := rr.(*dns.TXT); isTXT && strings.EqualFold(txt.Hdr.Name, name) {
+			ret = append(ret, txt.Txt)
+		}
+	}
+	require.NoError(t, zp.Err())
+	return ret
+}
+
+// hostileTXT are values that used to break out of quoting or crash the
+// zone file lexer. They are given as raw text; miekg/dns escapes them when
+// the update is packed.
+var hostileTXT = []string{`a"b`, `x" ( "y`, `p\" ; q`, `back\\`, "nl\nwww IN A 192.0.2.66", "tab\tdel\x7f"}
+
+func TestRFC2136_ACME_RejectsNonTokenValues(t *testing.T) {
+	h, dir := newRealZone(t, true)
+	remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 12345}
+	zonePath := filepath.Join(dir, "at.example.com.zone")
+	before, err := os.ReadFile(zonePath)
+	require.NoError(t, err)
+
+	for _, v := range append(hostileTXT, "has space", "dot.dot", "", "a=b") {
+		for _, op := range []string{"add", "remove"} {
+			m := wireUpdate(t, "at.example.com.", func(m *dns.Msg) {
+				rr := acmeTXT("_acme-challenge.at.example.com.", v)
+				if op == "add" {
+					m.Insert([]dns.RR{rr})
+				} else {
+					m.Remove([]dns.RR{rr})
+				}
+			})
+			assert.Equal(t, dns.RcodeRefused, runUpdate(t, h, remote, m), "%s %q", op, v)
+		}
+	}
+
+	after, err := os.ReadFile(zonePath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "zone file must not change")
+
+	// A real token still works.
+	tok := "LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0"
+	m := wireUpdate(t, "at.example.com.", func(m *dns.Msg) { m.Insert([]dns.RR{acmeTXT("_acme-challenge.at.example.com.", tok)}) })
+	require.Equal(t, dns.RcodeSuccess, runUpdate(t, h, remote, m))
+	assert.Equal(t, [][]string{{tok}}, zoneTXT(t, zonePath, "at.example.com.", "_acme-challenge.at.example.com."))
+}
+
+func TestRFC2136_NotZone(t *testing.T) {
+	for _, acmeOnly := range []bool{true, false} {
+		h, dir := newRealZone(t, acmeOnly)
+		remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 12345}
+
+		// Question names at.example.com, the record belongs to mx.example.com.
+		m := wireUpdate(t, "at.example.com.", func(m *dns.Msg) {
+			m.Insert([]dns.RR{acmeTXT("_acme-challenge.mx.example.com.", "LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0")})
+		})
+		assert.Equal(t, dns.RcodeNotZone, runUpdate(t, h, remote, m), "acmeOnly=%v", acmeOnly)
+		assert.Empty(t, zoneTXT(t, filepath.Join(dir, "mx.example.com.zone"), "mx.example.com.", "_acme-challenge.mx.example.com."))
+	}
+}
+
+func TestRFC2136_UpdateListener_TXTRoundTrip(t *testing.T) {
+	// The full update listener accepts arbitrary TXT; values must be stored
+	// exactly, without breaking the zone file or the server.
+	h, dir := newRealZone(t, false)
+	remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 12345}
+	zonePath := filepath.Join(dir, "at.example.com.zone")
+
+	for i, v := range hostileTXT {
+		name := fmt.Sprintf("txt%d.at.example.com.", i)
+		m := wireUpdate(t, "at.example.com.", func(m *dns.Msg) {
+			m.Insert([]dns.RR{acmeTXT(name, v)})
+		})
+		// Both sides are in presentation format: compare what was sent with
+		// what a zone parser reads back from the file.
+		sent := m.Ns[0].(*dns.TXT).Txt
+		require.Equal(t, dns.RcodeSuccess, runUpdate(t, h, remote, m), "value %q", v)
+		assert.Equal(t, [][]string{sent}, zoneTXT(t, zonePath, "at.example.com.", name), "value %q", v)
+
+		// Remove by value works on the stored value.
+		m = wireUpdate(t, "at.example.com.", func(m *dns.Msg) {
+			m.Remove([]dns.RR{acmeTXT(name, v)})
+		})
+		require.Equal(t, dns.RcodeSuccess, runUpdate(t, h, remote, m), "remove %q", v)
+		assert.Empty(t, zoneTXT(t, zonePath, "at.example.com.", name), "value %q", v)
+	}
+
+	// No record was injected by any of the values.
+	assert.Empty(t, zoneTXT(t, zonePath, "at.example.com.", "www.at.example.com."))
+	_, err := zone.New(zonePath)
+	require.NoError(t, err, "zone file must still load")
 }

@@ -28,10 +28,42 @@ var (
 	ErrNoMatchers     = errors.New("no record matchers provided")
 	ErrOriginChanged  = errors.New("zone origin changed")
 	ErrZoneNotFound   = errors.New("zone not found")
+	// ErrInvalidACMEToken is returned for a challenge value that is not a
+	// base64url ACME key authorization digest.
+	ErrInvalidACMEToken = errors.New("invalid ACME challenge token")
 )
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
 const EmptyPlaceholder = "placeholder"
+
+// ValidACMEToken reports whether v may be stored as an ACME dns-01 TXT value.
+// Real values are the 43-character base64url SHA-256 digest of the key
+// authorization (RFC 8555, section 8.4); anything else is rejected so that
+// clients allowed to answer challenges cannot write arbitrary text into the
+// zone. The empty string (no value) and EmptyPlaceholder are also accepted.
+func ValidACMEToken(v string) bool {
+	if v == "" || v == EmptyPlaceholder {
+		return true
+	}
+	if len(v) > 255 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if !isBase64URLChar(v[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase64URLChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	default:
+		return c == '-' || c == '_'
+	}
+}
 
 // Controller implements zone file modification methods
 type Controller interface {
@@ -201,6 +233,11 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 	}()
 
 	lg := slog.Default().With("domain", domain)
+
+	if !ValidACMEToken(newToken) || !ValidACMEToken(oldToken) {
+		err = ErrInvalidACMEToken
+		return err
+	}
 
 	domainDot := domain
 	if !strings.HasSuffix(domainDot, ".") {
@@ -1257,8 +1294,9 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 	}
 }
 
+// quoteTXT renders a raw value as a quoted zone file string; see dnsfmt.Quote.
 func quoteTXT(v string) string {
-	return fmt.Sprintf(` "%s" `, strings.ReplaceAll(v, `"`, `\"`))
+	return " " + dnsfmt.Quote([]byte(v)) + " "
 }
 
 func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {

@@ -674,3 +674,28 @@ func TestAtomicWriteFile_PreservesMode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0600), st.Mode().Perm())
 }
+
+func TestValidACMEToken(t *testing.T) {
+	for _, v := range []string{"", EmptyPlaceholder, "LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0", "a-b_c"} {
+		assert.True(t, ValidACMEToken(v), v)
+	}
+	for _, v := range []string{`a"b`, `a\b`, "a b", "a;b", "a(b", "a\nb", "fake/token", strings.Repeat("a", 256)} {
+		assert.False(t, ValidACMEToken(v), v)
+	}
+}
+
+func TestDomainCtrl_UpdateACMEChallenge_RejectsInvalidToken(t *testing.T) {
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+	before, err := os.ReadFile(f.path)
+	require.NoError(t, err)
+
+	ctrl := &DomainCtrl{files: []*File{f}}
+	for _, tc := range [][2]string{{`p\" ; q`, EmptyPlaceholder}, {"", `x" ( "y`}} {
+		err := ctrl.UpdateACMEChallenge(context.TODO(), "_acme-challenge.at.example.com.", tc[0], tc[1])
+		assert.ErrorIs(t, err, ErrInvalidACMEToken)
+	}
+
+	after, err := os.ReadFile(f.path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}

@@ -204,6 +204,9 @@ func (h *rfc2136Handler) handle(ctx context.Context, w dns.ResponseWriter, req *
 			if errors.As(err, &reject) {
 				return reject.rcode, err
 			}
+			if errors.Is(err, zone.ErrInvalidACMEToken) {
+				return dns.RcodeRefused, err
+			}
 			return dns.RcodeServerFailure, err
 		}
 	}
@@ -231,6 +234,11 @@ func (h *rfc2136Handler) applyRR(ctx context.Context, zoneName string, rr dns.RR
 	typeName := strings.ToUpper(dns.TypeToString[hdr.Rrtype])
 	h.lg.InfoContext(ctx, "RFC2136 update record", "zone", zoneName, "name", hdr.Name, "type", typeName, "class", dns.ClassToString[hdr.Class])
 
+	// RFC 2136, section 3.4.1.3: every update RR must be within the zone.
+	if !dns.IsSubDomain(zoneName, hdr.Name) {
+		return reject(dns.RcodeNotZone, "%s is outside of zone %s", hdr.Name, zoneName)
+	}
+
 	if !h.allowsRR(hdr) {
 		return reject(dns.RcodeRefused, "update for %s %s is not allowed on the ACME listener", hdr.Name, typeName)
 	}
@@ -253,6 +261,9 @@ func (h *rfc2136Handler) addRR(ctx context.Context, rr dns.RR) error {
 	value := rdataValue(rr)
 
 	if h.acmeOnly {
+		if value == "" {
+			return reject(dns.RcodeRefused, "empty challenge value for %s", hdr.Name)
+		}
 		// Present semantics: replace the placeholder left by a previous cleanup
 		// (or append), so that apex and wildcard challenges sharing one
 		// _acme-challenge name can coexist.
@@ -270,6 +281,9 @@ func (h *rfc2136Handler) removeRR(ctx context.Context, rr dns.RR) error {
 	value := rdataValue(rr)
 
 	if h.acmeOnly {
+		if value == "" {
+			return reject(dns.RcodeRefused, "empty challenge value for %s", hdr.Name)
+		}
 		// Cleanup semantics: replace the token with the placeholder in place,
 		// keeping the entry (and its TTL inheritance) in the zone file.
 		return h.zctl.UpdateACMEChallenge(ctx, hdr.Name, "", value)
@@ -347,10 +361,42 @@ func (h *rfc2136Handler) allowsRR(hdr *dns.RR_Header) bool {
 func rdataValue(rr dns.RR) string {
 	switch v := rr.(type) {
 	case *dns.TXT:
-		return strings.Join(v.Txt, "")
+		return unescapeTXT(strings.Join(v.Txt, ""))
 	case *dns.SPF:
-		return strings.Join(v.Txt, "")
+		return unescapeTXT(strings.Join(v.Txt, ""))
 	default:
 		return strings.TrimSpace(strings.TrimPrefix(rr.String(), rr.Header().String()))
 	}
 }
+
+// unescapeTXT turns a character-string as decoded by miekg/dns (presentation
+// format: \X and \DDD escapes) back into raw bytes. Passing the escaped form
+// on would get it escaped a second time when written to the zone file.
+func unescapeTXT(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' || i+1 >= len(s) {
+			b = append(b, c)
+			continue
+		}
+
+		i++
+		if i+2 < len(s) && isDigit(s[i]) && isDigit(s[i+1]) && isDigit(s[i+2]) {
+			if v := int(s[i]-'0')*100 + int(s[i+1]-'0')*10 + int(s[i+2]-'0'); v <= 255 {
+				b = append(b, byte(v))
+				i += 2
+				continue
+			}
+		}
+		b = append(b, s[i])
+	}
+
+	return string(b)
+}
+
+func isDigit(c byte) bool { return '0' <= c && c <= '9' }

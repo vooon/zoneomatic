@@ -535,3 +535,17 @@ func TestZMUpdatePTR(t *testing.T) {
 func testPDNSAPIKey(user, password string) string {
 	return base64.StdEncoding.EncodeToString([]byte(user + ":" + password))
 }
+
+func TestLegoPresent_InvalidTokenMappedTo400(t *testing.T) {
+	htp := fakeHTPasswd{user: "u", pass: "p"}
+	zctl := &fakeZoneController{acmeErr: fmt.Errorf("wrapped: %w", zone.ErrInvalidACMEToken)}
+	srv := newTestServer(htp, zctl)
+
+	req := httptest.NewRequest(http.MethodPost, "/present", strings.NewReader(`{"fqdn":"_acme-challenge.example.com.","value":"a\" ; b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("u", "p")
+	rec := httptest.NewRecorder()
+	srv.Mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+}

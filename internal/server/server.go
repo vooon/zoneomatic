@@ -435,6 +435,13 @@ func badRequestError(detail string) *fuego.HTTPError {
 }
 
 func zoneErrorToHTTPError(err error) error {
+	if errors.Is(err, zone.ErrInvalidACMEToken) {
+		return &fuego.HTTPError{
+			Title:  "bad request",
+			Detail: err.Error(),
+			Status: http.StatusBadRequest,
+		}
+	}
 	if errors.Is(err, zone.ErrZoneNotFound) {
 		return &fuego.HTTPError{
 			Title:  "zone not found",
