@@ -1,4 +1,4 @@
-$ORIGIN mx.example.com
+$ORIGIN mx.example.com.
 $TTL 60
 ; SOA Record
 @                                IN   SOA        ns1.example.com. hostmaster.example.com. (
