@@ -25,8 +25,8 @@ func Increase(s []byte) []byte {
 	if err != nil {
 		return s
 	}
-	if isEpoch(i) { // return current epoch
-		e := time.Now().Unix()
+	if isEpoch(i) { // return current epoch, but always move forward
+		e := max(time.Now().Unix(), i+1)
 		return []byte(strconv.FormatInt(e, 10))
 	}
 	// otherwise just increase? TODO(miek): smarter later
