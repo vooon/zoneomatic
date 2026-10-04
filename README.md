@@ -6,13 +6,18 @@ DNS API server for self-hosted DynDNS / ACME.
 I use CoreDNS to serve my zones, unfortunately it does not support nsupdate protocol.
 It does auto-reload modified zone files, so an external service can update them.
 
-This project aims to provide DDNS API similar to *no-ip.com*,
-so existing [ddns-scripts][ddns] can interact with it.
+Zone-o-matic edits those zone files on request:
 
-As a secondary feature it also provides API, which [acme-sh][acmesh] can use
-to issue TLS certificates using `dns-01` challenge.
+- **DDNS** — a *no-ip.com* style API, so existing [ddns-scripts][ddns] can
+  update A/AAAA records, optionally with matching PTR records.
+- **ACME `dns-01`** — challenge TXT records for [acme.sh][acmesh] (acme-dns
+  API), [LEGO HTTP-Request][legohttp], and RFC2136 (DNS UPDATE) for
+  cert-manager's built-in `rfc2136` solver or `nsupdate`.
+- **Record management** — a PowerDNS-compatible API subset (e.g. for Proxmox
+  SDN), RFC2136 updates, and a few custom calls.
 
-It also supports [LEGO HTTP-Request][legohttp] protocol for the same challenge.
+Zone files stay readable: comments are kept, and every write is checked before
+it replaces the file (see [Zone files](#zone-files)).
 
 You can use OpenWRT package from my feed: [vooon/my-openwrt-feed][owrtpkg].
 
@@ -41,6 +46,54 @@ curl -u "user:password" \
   -d '{"subdomain":"host.example.com","txt":"SomeRandomToken"}' \
   "http://127.0.0.1:9999/acme/update"
 ```
+
+Zone files
+----------
+
+Each `--zone` file must contain a SOA record; its owner (resolved against
+`$ORIGIN`) is the zone origin. Several `$ORIGIN` sections in one file are
+supported.
+
+On every change zoneomatic rewrites the whole file:
+
+- **Comments are kept**, in every position: comment lines, at the end of a
+  record, inside SOA or multi-line TXT parentheses. A replaced record keeps its
+  comment; a deleted record takes its comment along.
+- The **SOA serial is bumped**. Unix-time serials become the current time
+  (always increasing, even for several changes within a second), `YYYYMMDDnn`
+  serials are incremented. The serial line gets a date comment.
+- The file is **re-laid out** in a compact, aligned format: owner names
+  relative to `$ORIGIN`, values as written, blank lines kept. `$ORIGIN` is
+  always written fully qualified.
+- The result is **verified before it replaces the file**: it must contain
+  exactly the intended records (checked with an independent parser,
+  miekg/dns) and all comments. Otherwise the update fails and the file is left
+  untouched. The file is replaced atomically.
+
+The server that serves the zone (e.g. CoreDNS `file` plugin with `reload`)
+picks up the change through the new serial.
+
+### ACME challenge records
+
+Challenge TXT records live at `_acme-challenge.<name>`. They are never removed
+from the file; when no challenge is active the name holds a single
+`"placeholder"` value:
+
+- *present* replaces the placeholder with the token, or adds the token next to
+  the others when another challenge for the same name is in flight (e.g. the
+  apex and the wildcard of one certificate);
+- *cleanup* removes the token and leaves exactly one placeholder once the last
+  token is gone;
+- names that are not in the zone yet are created on first use.
+
+Challenge values must be ACME tokens (base64url: `A-Z a-z 0-9 - _`, as
+RFC 8555 `dns-01` values are); anything else is rejected before the zone file
+is touched. `--acme-ttl` sets the TTL of challenge records (default: the zone
+`$TTL`).
+
+To preview the layout of an existing file without changing it, use the bundled
+formatter: `dnsfmt --no-inc example.com.zone` (`-r` rewrites in place).
+
 
 Security notes
 --------------
@@ -99,15 +152,15 @@ Flags:
   -z, --zone=FILE,...                     Zone files to update ($ZM_ZONE)
       --acme-ttl=0                        TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL ($ZM_ACME_TTL)
       --ddns-manage-ptr                   Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored ($ZM_DDNS_MANAGE_PTR)
-      --rfc2136-acme-listen=STRING          Listen address for RFC2136 dynamic updates (host:port); empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
-      --rfc2136-acme-tsig-file=FILE         BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_ACME_TSIG_FILE)
-      --rfc2136-acme-allow=CIDR,...         Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
-      --rfc2136-update-listen=STRING        Listen address for RFC2136 dynamic updates (host:port); empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
-      --rfc2136-update-tsig-file=FILE       BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_UPDATE_TSIG_FILE)
-      --rfc2136-update-allow=CIDR,...       Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
-      --rfc2136-update-max-ttl=0            Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL ($ZM_RFC2136_UPDATE_MAX_TTL)
       --debug                             Enable debug logging ($ZM_DEBUG)
       --version                           Print version and exit ($ZM_VERSION)
+      --rfc2136-acme-listen=STRING        Listen address (host:port); empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
+      --rfc2136-acme-tsig-file=FILE       BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_ACME_TSIG_FILE)
+      --rfc2136-acme-allow=CIDR,...       Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
+      --rfc2136-update-listen=STRING      Listen address (host:port); empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
+      --rfc2136-update-tsig-file=FILE     BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_UPDATE_TSIG_FILE)
+      --rfc2136-update-allow=CIDR,...     Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
+      --rfc2136-update-max-ttl=0          Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL ($ZM_RFC2136_UPDATE_MAX_TTL)
       --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
       --otel-header=KEY=VALUE;...         Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
       --otel-enable-traces                Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
@@ -235,9 +288,15 @@ JSON Object fields:
 | Name | Req | Description | Example |
 |------|-----|-------------|---------|
 | subdomain | Yes | Record name without `_acme-challenge.`, *not a UUID* | `foo.example.com` |
-| txt | Yes | Validation token content for the TXT record | `SomeRandomToken` |
+| txt | Yes | Validation token (base64url) for the TXT record | `SomeRandomToken` |
 
 See also: https://github.com/joohoi/acme-dns
+
+> [!NOTE]
+> This call replaces all challenge values of the name with `txt`. To answer
+> the apex and the wildcard of one
+> certificate at the same time, use `/present`/`/cleanup` or RFC2136, which add
+> and remove single values.
 
 > [!NOTE]
 > Original ACME-DNS uses `X-Api-User`/`X-Api-Key` style authentication and typically a
@@ -276,7 +335,7 @@ Response status codes:
 | Code | Meaning |
 |------|---------|
 | 200 | Updated |
-| 400 | Bad request |
+| 400 | Bad request (e.g. `txt` is not a valid ACME token) |
 | 401 | Unauthorized |
 | 404 | Zone not found |
 | 500 | Unexpected server error |
@@ -285,7 +344,8 @@ Response status codes:
 POST /present
 -------------
 
-Update ACME DNS TXT record, in LEGO HTTP-request format.
+Add an ACME challenge TXT value, in LEGO HTTP-request format. Other values of
+the same name are kept (see [ACME challenge records](#acme-challenge-records)).
 
 Required HTTP Headers:
 
@@ -297,8 +357,8 @@ JSON Object fields:
 
 | Name | Req | Description | Example |
 |------|-----|-------------|---------|
-| fqdn | Yes | Record name without `_acme-challenge.` | `foo.example.com` |
-| value | Yes | Validation token content for the TXT record | `SomeRandomToken` |
+| fqdn | Yes | Record name, with or without `_acme-challenge.` | `_acme-challenge.foo.example.com.` |
+| value | Yes | Validation token (base64url) for the TXT record | `SomeRandomToken` |
 
 See also: https://go-acme.github.io/lego/dns/httpreq/
 
@@ -310,7 +370,7 @@ Response status codes:
 | Code | Meaning |
 |------|---------|
 | 200 | Updated |
-| 400 | Bad request |
+| 400 | Bad request (e.g. `value` is not a valid ACME token) |
 | 401 | Unauthorized |
 | 404 | Zone not found |
 | 500 | Unexpected server error |
@@ -319,7 +379,7 @@ Response status codes:
 POST /cleanup
 -------------
 
-Remove ACME DNS TXT record, in LEGO HTTP-request format.
+Remove an ACME challenge TXT value, in LEGO HTTP-request format.
 
 Required HTTP Headers:
 
@@ -331,8 +391,8 @@ JSON Object fields:
 
 | Name | Req | Description | Example |
 |------|-----|-------------|---------|
-| fqdn | Yes | Record name without `_acme-challenge.` | `foo.example.com` |
-| value | No | Validation token content for the TXT record, Ignored | `SomeRandomToken` |
+| fqdn | Yes | Record name, with or without `_acme-challenge.` | `_acme-challenge.foo.example.com.` |
+| value | No | Token to remove; other values of the name are kept. Empty resets the name to the placeholder. | `SomeRandomToken` |
 
 See also: https://go-acme.github.io/lego/dns/httpreq/
 
@@ -366,6 +426,7 @@ JSON Object fields:
 |------|-----|-------------|---------|
 | fqdn | Yes | Record domain name. | `foo.example.com` |
 | type | Yes | Record type, case-insensitive. | `NS` |
+| ttl | No | TTL for the records; omitted or `0` uses the zone `$TTL`. | `300` |
 | values | Yes | List of records values | `["ns1", "ns2"]` |
 
 > [!NOTE]
@@ -456,14 +517,15 @@ address is set and requires a TSIG key file:
 
 Both listeners serve UDP and TCP on the same address.
 
-On the ACME listener, adding a TXT value replaces the placeholder (or is
-appended when another challenge for the same name is in flight). Removing a
-value drops it and leaves exactly one placeholder once the last value is gone.
-Deleting the whole TXT RRset or name (`nsupdate`'s
-`update delete _acme-challenge.example.com. [TXT]`) also resets the name to a
-single placeholder instead of removing it from the zone file. Names that are
-not in the zone yet, e.g. `_acme-challenge.s3.example.com.`, are created on
-first use.
+The ACME listener follows the [ACME challenge records](#acme-challenge-records)
+rules: adding a TXT value presents a challenge, removing it cleans up, and
+deleting the whole TXT RRset or name (`nsupdate`'s
+`update delete _acme-challenge.example.com. [TXT]`) resets the name to a
+single placeholder. Values that are not ACME tokens are refused (`REFUSED`).
+
+On both listeners, every record must be inside the zone named in the update
+(otherwise `NOTZONE`), and that zone must be one of the `--zone` files
+(otherwise `NOTAUTH`).
 
 ### TSIG keys
 
@@ -513,8 +575,8 @@ nsupdate -k /etc/zoneomatic/tsig.conf
 ### Example: cert-manager (DNS-01 via rfc2136)
 
 cert-manager's `rfc2136` solver runs inside the controller, so no webhook
-deployment is needed. Point it at the ACME listener and, optionally, restrict
-the propagation self-check to your authoritative nameserver:
+deployment is needed. Point it at the ACME listener (tested with cert-manager
+v1.21, see [Development](#development)):
 
 ```yaml
 apiVersion: v1
@@ -544,14 +606,23 @@ spec:
             tsigSecretSecretRef:
               name: zoneomatic-tsig
               key: tsig-key
-          # Optional: query the authoritative server for the self-check
-          # instead of public resolvers.
-          # nameservers:
-          #   - 10.0.0.2:53
 ```
 
 The `tsig-key` value is the base64 secret from the key file (the `secret "..."`
-content, without quotes).
+content, without quotes). The `nameserver` may also be a hostname with port.
+
+cert-manager checks that the challenge record is visible before asking the CA
+to validate it. To run that check against your authoritative server instead of
+public resolvers, set controller flags (Helm values):
+
+```yaml
+extraArgs:
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=10.0.0.2:53
+```
+
+cert-manager processes challenges for the same name one after another, so a
+certificate for `example.com` and `*.example.com` takes two validation rounds.
 
 ### Security notes
 
@@ -574,15 +645,31 @@ Therefore:
   records.
 - Use separate keys for the ACME and full-update listeners, and rotate by
   adding a new key and pointing clients at it.
+- A key is not limited to certain names: anyone holding the ACME key can pass
+  `dns-01` for any name in the configured zones, i.e. get certificates for
+  them. Several clusters sharing one key can issue for each other's names.
 - Treat the TSIG key file (and any Kubernetes Secret holding it) as sensitive: a
   leaked key allows updates within that key's scope.
 
 
-dnsfmt behavior
----------------
+Development
+-----------
 
-- Multi-part `TXT` records are kept in parenthesized multiline form.
-- `TLSA` records are kept on a single line.
+```bash
+go test ./...                                   # unit tests
+go test -tags=e2e ./tests/e2e/...               # end-to-end: built binary, nsupdate/knsupdate if installed
+go test ./internal/zone -update                 # rewrite zone golden files after a format change
+go test ./internal/zone -run '^$' -fuzz FuzzZoneSave -fuzztime 5m
+```
+
+`pkg/dnsfmt` is a separate Go module: test it through a workspace
+(`go work init . ./pkg/dnsfmt && go test ./pkg/dnsfmt/...`).
+
+`make k3d` issues real certificates with cert-manager's `rfc2136` solver
+against zoneomatic, Pebble and CoreDNS in a throwaway k3d cluster (needs
+docker, k3d, kubectl, helm; `make k3d-clean` removes it). The cluster gets its
+own kubeconfig file (`.k3d-kubeconfig`), the default kubectl context is never
+used. CI runs the same targets.
 
 
 [ddns]: https://openwrt.org/docs/guide-user/services/ddns/client
