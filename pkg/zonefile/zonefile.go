@@ -77,6 +77,15 @@ func (e Entry) Values() (ret [][]byte) {
 	return
 }
 
+// RawValues returns the fields for the entry as written in the zone file,
+// including quotes and escapes, ready to be written out again.
+func (e Entry) RawValues() (ret [][]byte) {
+	for _, i := range e.find(useValue) {
+		ret = append(ret, e.tokens[i].t.val)
+	}
+	return
+}
+
 // Comments returns the comments for the entry.
 func (e Entry) Comments() (ret [][]byte) {
 	is := e.find(useComment)
@@ -84,6 +93,64 @@ func (e Entry) Comments() (ret [][]byte) {
 		ret = append(ret, e.tokens[is[i]].t.Value())
 	}
 	return
+}
+
+// IsBlank reports whether the entry is an empty (or whitespace-only) line.
+func (e Entry) IsBlank() bool {
+	return e.IsComment && len(e.find(useComment)) == 0
+}
+
+// ValueComments returns the comments of the entry by position: head holds the
+// comments before the first value (e.g. after an opening parenthesis), and
+// after[i] the comments that follow value i, up to the next value.
+func (e Entry) ValueComments() (head [][]byte, after [][][]byte) {
+	after = make([][][]byte, len(e.find(useValue)))
+	vi := -1
+	for _, tt := range e.tokens {
+		switch tt.u {
+		case useValue:
+			vi++
+		case useComment:
+			if vi < 0 {
+				head = append(head, tt.t.Value())
+			} else {
+				after[vi] = append(after[vi], tt.t.Value())
+			}
+		}
+	}
+	return head, after
+}
+
+// WithComments returns a copy of the entry with the given comments appended
+// to its last line, joined into a single comment.
+func (e Entry) WithComments(comments [][]byte) Entry {
+	if len(comments) == 0 {
+		return e
+	}
+
+	text := []byte(";")
+	for _, c := range comments {
+		c = bytes.TrimSpace(bytes.TrimPrefix(c, []byte(";")))
+		if len(c) > 0 {
+			text = append(append(text, ' '), c...)
+		}
+	}
+	if len(text) == 1 {
+		return e
+	}
+
+	add := []taggedToken{
+		tttSpace,
+		{token{val: text, typ: tokenComment}, useComment},
+	}
+
+	tokens := slices.Clone(e.tokens)
+	at := len(tokens)
+	if at > 0 && tokens[at-1].t.typ == tokenNewline {
+		at--
+	}
+	e.tokens = slices.Insert(tokens, at, add...)
+	return e
 }
 
 func (e Entry) Equal(e2 Entry) bool {
@@ -151,6 +218,26 @@ func (z *Zonefile) Entries() (r []Entry) {
 
 // Parse bytestring containing a zonefile
 func Load(data []byte) (r *Zonefile, e *ParsingError) {
+	// The lexer uses NUL as its end-of-input marker; a NUL byte in the data
+	// would silently cut the file short.
+	if i := bytes.IndexByte(data, 0); i >= 0 {
+		line := bytes.Count(data[:i], []byte{'\n'})
+		return nil, &ParsingError{msg: "NUL byte in zone file", LineNo: line + 1}
+	}
+	// CRLF line endings are fine, a lone CR is not: parsers disagree on it
+	// (a line break here, ignored by miekg/dns).
+	for i := bytes.IndexByte(data, '\r'); i >= 0; {
+		if i+1 >= len(data) || data[i+1] != '\n' {
+			line := bytes.Count(data[:i], []byte{'\n'})
+			return nil, &ParsingError{msg: "CR without LF in zone file", LineNo: line + 1}
+		}
+		next := bytes.IndexByte(data[i+1:], '\r')
+		if next < 0 {
+			break
+		}
+		i += 1 + next
+	}
+
 	r = &Zonefile{}
 	l := lex(data)
 	// On an early return the lexer goroutine would block forever on its
@@ -175,7 +262,11 @@ func Load(data []byte) (r *Zonefile, e *ParsingError) {
 		}
 
 		if t.typ == tokenNewline && len(line) == 0 {
-			// or empty line
+			// Empty line: keep one blank entry for a run of them, so
+			// printers can keep the grouping of the file.
+			if n := len(r.entries); n > 0 && !r.entries[n-1].IsBlank() {
+				r.entries = append(r.entries, Entry{IsComment: true, tokens: []taggedToken{{t, useOther}}})
+			}
 			continue
 		}
 
@@ -266,7 +357,9 @@ func parseLine(line []token) (e Entry, err *ParsingError) {
 		}
 	}
 	if iFirstItem == -1 {
-		e.IsComment = e.tokens[0].t.typ == tokenComment
+		// A line without items is a comment line (even when indented), or a
+		// blank line when it has no comment either.
+		e.IsComment = true
 		return
 	}
 
@@ -277,10 +370,15 @@ func parseLine(line []token) (e Entry, err *ParsingError) {
 		bytes.Equal(e.tokens[iFirstItem].t.Value(), []byte("$TTL")) {
 		e.tokens[iFirstItem].u = useControl
 		e.IsControl = true
+		hasValue := false
 		for i := iFirstItem + 1; i < len(e.tokens); i++ {
 			if e.tokens[i].t.IsItem() {
 				e.tokens[i].u = useValue
+				hasValue = true
 			}
+		}
+		if !hasValue {
+			err = newParsingError("missing value for "+string(e.tokens[iFirstItem].t.Value()), e.tokens[iFirstItem].t)
 		}
 		return
 	}
@@ -567,6 +665,9 @@ func (l *lexer) acceptUntil(valid string) {
 func lexInitial(l *lexer) lexerState {
 	switch c := l.next(); {
 	case c == eof:
+		if l.inGroup {
+			return l.errorf("unclosed (")
+		}
 		return nil
 	case c == ' ' || c == '\t' || (l.inGroup && (c == '\n' || c == '\r')):
 		return lexSpace

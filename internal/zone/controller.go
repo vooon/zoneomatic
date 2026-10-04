@@ -365,9 +365,22 @@ func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDo
 	return best
 }
 
+// lowerASCII lowercases ASCII letters only, as DNS name comparison does
+// (RFC 4343); strings.ToLower would map all invalid UTF-8 to U+FFFD.
+// It works on bytes: strings.Map would also replace invalid UTF-8.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 func domainMatchesOrigin(domain, origin string) bool {
-	domain = strings.ToLower(normalizeZoneName(domain))
-	origin = strings.ToLower(normalizeZoneName(origin))
+	domain = lowerASCII(normalizeZoneName(domain))
+	origin = lowerASCII(normalizeZoneName(origin))
 
 	if domain == origin {
 		return true
@@ -398,7 +411,7 @@ func (m Matcher) Match(e zonefile.Entry) bool {
 }
 
 func dnsNamesEqual(a, b []byte) bool {
-	return strings.EqualFold(normalizeZoneName(string(a)), normalizeZoneName(string(b)))
+	return dnsfmt.NameEqual([]byte(normalizeZoneName(string(a))), []byte(normalizeZoneName(string(b))))
 }
 
 func (m Matcher) String() string {
@@ -439,44 +452,58 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 		return nil, nil, zfErr
 	}
 
-	ok := false
+	// The zone apex is the SOA owner, resolved against the $ORIGIN in effect
+	// there. Names before the first $ORIGIN are relative to the apex.
+	entries := zf.Entries()
+	cur := s.origin
+	prev := ""
 	origin := ""
-	prevDomain := []byte{}
-	for _, ent := range zf.Entries() {
-		if ent.IsComment {
-			continue
-		}
-
-		if ent.IsControl {
+	for i := range entries {
+		ent := &entries[i]
+		switch {
+		case ent.IsComment:
+		case ent.IsControl:
 			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-				origin = string(zonefile.Fqdn(ent.Values()[0]))
+				cur = string(zonefile.Fqdn(ent.Values()[0]))
 			}
-			continue
-		}
-
-		dom := ent.Domain()
-		if dom != nil {
-			prevDomain = dom
-		} else {
-			dom = prevDomain
-		}
-
-		err = ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
-		if err != nil {
-			return
-		}
-
-		if ent.RRType() == dns.TypeSOA {
-			soa = &ent
-			ok = true
+		default:
+			if dom := string(ent.Domain()); dom != "" {
+				prev = absName(dom, cur)
+			}
+			if ent.RRType() == dns.TypeSOA && origin == "" {
+				origin = prev
+				soa = ent
+			}
 		}
 	}
-	if !ok {
+	if soa == nil {
 		return nil, nil, ErrSoaNotFound
 	}
+	if !dns.IsFqdn(origin) {
+		return nil, nil, fmt.Errorf("%w: cannot determine the zone origin, set $ORIGIN or use an absolute SOA owner", ErrSoaNotFound)
+	}
 
-	if origin == "" {
-		origin = string(soa.Domain())
+	// Give every record an explicit owner, relative to the apex (absolute
+	// when outside of it). Inherited owners and later $ORIGIN directives are
+	// resolved first, so the name means the same wherever it is printed.
+	cur = origin
+	prev = ""
+	for i := range entries {
+		ent := &entries[i]
+		switch {
+		case ent.IsComment:
+		case ent.IsControl:
+			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
+				cur = string(zonefile.Fqdn(ent.Values()[0]))
+			}
+		default:
+			if dom := string(ent.Domain()); dom != "" {
+				prev = absName(dom, cur)
+			}
+			if err = ent.SetDomain([]byte(StripOrigin(prev, origin))); err != nil {
+				return
+			}
+		}
 	}
 
 	if s.origin == "" {
@@ -485,8 +512,6 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	} else if s.origin != origin {
 		return nil, nil, fmt.Errorf("%w: prev=%s new=%s", ErrOriginChanged, s.origin, origin)
 	}
-
-	// PrintEntries(zf.Entries(), os.Stdout)
 
 	return
 }
@@ -522,17 +547,24 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
 	found := false
 	matchedCount := 0
+	// Comments of replaced records move to the first new record. Without
+	// new values (a delete) they go away with their records.
+	insertAt := -1
+	var carried [][]byte
 	for idx, ent := range oldEntries {
 		if matchers.Match(ent) {
 			matchedCount++
 			if !found {
 				lg.DebugContext(ctx, "First matching record found", "index", idx, "old_values", ent.ValuesStrings())
+				insertAt = len(newEntries)
+				carried = append(carried, ent.Comments()...)
 				newEntries = append(newEntries, values...)
 				found = true
 				continue
 			}
 			if replaceAll {
 				lg.DebugContext(ctx, "Remove duplicate matching record", "index", idx, "old_values", ent.ValuesStrings())
+				carried = append(carried, ent.Comments()...)
 				continue
 			}
 			lg.DebugContext(ctx, "Keep extra matching record", "index", idx, "old_values", ent.ValuesStrings())
@@ -544,6 +576,9 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		attribute.Int("zone.old_entry_count", len(oldEntries)),
 		attribute.Int("zone.matched_entry_count", matchedCount),
 	)
+	if insertAt >= 0 && len(values) > 0 {
+		newEntries[insertAt] = newEntries[insertAt].WithComments(carried)
+	}
 
 	// 2. If old record not found - add new values, if allowed
 	if !found {
@@ -584,12 +619,18 @@ func (s *File) saveIfChanged(ctx context.Context, lg *slog.Logger, oldEntries, n
 	}
 
 	uglyBuf := bytes.NewBuffer(nil)
-	PrintEntries(newEntries, uglyBuf)
+	PrintEntries(s.origin, newEntries, uglyBuf)
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
 	if err != nil {
 		return
+	}
+
+	// Never write a file the formatter may have damaged.
+	if err = verifyReformat(s.origin, uglyBuf.Bytes(), ret.Bytes()); err != nil {
+		lg.ErrorContext(ctx, "Zone file verification failed, not saving", "error", err)
+		return false, err
 	}
 
 	err = fileutil.AtomicWriteFile(s.path, ret.Bytes())
@@ -1013,7 +1054,10 @@ func (s *File) cleanupACMEChallenge(ctx context.Context, lg *slog.Logger, shortD
 	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
 
 	hasPlaceholder := false
+	placeholderAt := -1
 	firstDropped := -1
+	// Comments of dropped entries move to the placeholder that stays.
+	var carried [][]byte
 	for _, ent := range oldEntries {
 		if ent.IsComment || ent.IsControl || ent.RRType() != dns.TypeTXT || !dnsNamesEqual(ent.Domain(), shortDomain) {
 			newEntries = append(newEntries, ent)
@@ -1025,13 +1069,16 @@ func (s *File) cleanupACMEChallenge(ctx context.Context, lg *slog.Logger, shortD
 			if firstDropped < 0 {
 				firstDropped = len(newEntries)
 			}
+			carried = append(carried, ent.Comments()...)
 			continue
 		case EmptyPlaceholder:
 			if hasPlaceholder {
 				lg.DebugContext(ctx, "Drop duplicate placeholder")
+				carried = append(carried, ent.Comments()...)
 				continue
 			}
 			hasPlaceholder = true
+			placeholderAt = len(newEntries)
 		}
 
 		newEntries = append(newEntries, ent)
@@ -1040,15 +1087,17 @@ func (s *File) cleanupACMEChallenge(ctx context.Context, lg *slog.Logger, shortD
 	if !hasPlaceholder {
 		switch {
 		case firstDropped >= 0:
-			newEntries = slices.Insert(newEntries, firstDropped, placeholder...)
+			placeholderAt = firstDropped
 		default:
 			if idx := anchorInsertIndex(newEntries, shortDomain); idx >= 0 {
-				newEntries = slices.Insert(newEntries, idx+1, placeholder...)
+				placeholderAt = idx + 1
 			} else {
-				newEntries = append(newEntries, placeholder...)
+				placeholderAt = len(newEntries)
 			}
 		}
+		newEntries = slices.Insert(newEntries, placeholderAt, placeholder...)
 	}
+	newEntries[placeholderAt] = newEntries[placeholderAt].WithComments(carried)
 
 	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
 }
@@ -1248,7 +1297,7 @@ func StripOrigin(name, origin string) string {
 		return name
 	}
 
-	if strings.EqualFold(nameFQDN, originFQDN) {
+	if dnsfmt.NameEqual([]byte(nameFQDN), []byte(originFQDN)) {
 		return "@"
 	}
 
@@ -1262,20 +1311,56 @@ func StripOrigin(name, origin string) string {
 	return nameFQDN[:l1-l2-1]
 }
 
-func PrintEntries(entries []zonefile.Entry, w io.Writer) {
-	for _, e := range entries {
+// absName resolves a (possibly relative) owner name against origin.
+func absName(name, origin string) string {
+	switch {
+	case name == "@":
+		return origin
+	case dns.IsFqdn(name):
+		return name
+	case origin == "" || origin == ".":
+		return name + "."
+	default:
+		return name + "." + origin
+	}
+}
 
-		if e.IsComment {
+// PrintEntries writes entries as a plain zone file. Owner names are taken as
+// relative to the zone origin (as load sets them) and written relative to
+// the $ORIGIN in effect at their line.
+func PrintEntries(origin string, entries []zonefile.Entry, w io.Writer) {
+	cur := origin
+	for _, e := range entries {
+		if e.IsControl && bytes.Equal(e.Command(), []byte("$ORIGIN")) {
+			cur = string(zonefile.Fqdn(e.Values()[0]))
+		}
+		if e.IsBlank() {
+			fmt.Fprintln(w) // nolint:errcheck
+			continue
+		} else if e.IsComment {
 			for _, c := range e.Comments() {
 				fmt.Fprintf(w, "%s\n", c) // nolint:errcheck
 			}
 			continue
 		} else if e.IsControl {
-			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" "))) // nolint:errcheck
+			values := e.RawValues()
+			if bytes.Equal(e.Command(), []byte("$ORIGIN")) && len(values) > 0 {
+				// zoneomatic always treats $ORIGIN as absolute.
+				values = append([][]byte{zonefile.Fqdn(values[0])}, values[1:]...)
+			}
+			fmt.Fprintf(w, "%s %s", e.Command(), bytes.Join(values, []byte(" "))) // nolint:errcheck
+			for _, c := range e.Comments() {
+				fmt.Fprintf(w, " %s", c) // nolint:errcheck
+			}
+			fmt.Fprintln(w) // nolint:errcheck
 			continue
 		}
 
-		fmt.Fprintf(w, "%s ", e.Domain()) // nolint:errcheck
+		if name := string(e.Domain()); name != "" {
+			fmt.Fprintf(w, "%s ", StripOrigin(absName(name, origin), cur)) // nolint:errcheck
+		} else {
+			fmt.Fprint(w, " ") // nolint:errcheck
+		}
 		if ttl := e.TTL(); ttl != nil {
 			fmt.Fprintf(w, " %d ", *ttl) // nolint:errcheck
 		}
@@ -1286,12 +1371,38 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 			fmt.Fprintf(w, " %s ", typ) // nolint:errcheck
 		}
 
-		for _, v := range e.Values() {
-			fmt.Fprintf(w, " %s ", quoteTXT(string(v))) // nolint:errcheck
+		// Comments stay next to the value they follow; a comment before or
+		// between values needs the multi-line ( ... ) form.
+		values := e.RawValues()
+		head, after := e.ValueComments()
+		if len(head) == 0 && !slices.ContainsFunc(after[:max(len(after)-1, 0)], func(c [][]byte) bool { return len(c) > 0 }) {
+			fmt.Fprintf(w, " %s", bytes.Join(values, []byte(" "))) // nolint:errcheck
+			if len(after) > 0 {
+				printComments(w, after[len(after)-1])
+			}
+			fmt.Fprintln(w) // nolint:errcheck
+			continue
 		}
 
+		fmt.Fprint(w, " (") // nolint:errcheck
+		printComments(w, head)
 		fmt.Fprintln(w) // nolint:errcheck
+		for i, v := range values {
+			fmt.Fprintf(w, "    %s", v) // nolint:errcheck
+			printComments(w, after[i])
+			fmt.Fprintln(w) // nolint:errcheck
+		}
+		fmt.Fprintln(w, ")") // nolint:errcheck
 	}
+}
+
+// printComments writes comments at the end of the current line. Several
+// comments are joined, as only one fits on a line.
+func printComments(w io.Writer, comments [][]byte) {
+	if len(comments) == 0 {
+		return
+	}
+	fmt.Fprintf(w, " %s", bytes.Join(comments, []byte(" "))) // nolint:errcheck
 }
 
 // quoteTXT renders a raw value as a quoted zone file string; see dnsfmt.Quote.

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("$ORIGIN \x19\n SOA 0 0 (0 0 010\r0 0 )")

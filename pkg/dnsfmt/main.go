@@ -4,11 +4,32 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"regexp"
+	"slices"
+	"strconv"
 
 	"github.com/miekg/dns"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
 )
 
+const (
+	// maxNameWidth caps the owner name column; longer names overflow it.
+	maxNameWidth = 24
+	// indent is used for the lines of a multi-line ( ... ) value.
+	indent = "    "
+)
+
+// Reformat writes the zone file in data in a compact, aligned layout:
+//
+//   - owner names are made relative to $ORIGIN and aligned in a column
+//     (capped at maxNameWidth); a repeated owner is left blank
+//   - a TTL column only appears when records have explicit TTLs
+//   - values are written as they are (no rewriting of names or times),
+//     multi-line values are indented by four spaces
+//   - all comments are kept next to the value they follow, blank lines are
+//     kept as in the input (runs collapsed to one)
+//
+// With incrementSerial the SOA serial is bumped (see Increase).
 func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 	origin = zonefile.Fqdn(origin)
 
@@ -17,12 +38,11 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 		return fmt.Errorf("dnsfmt: parse error on line %d: %w", perr.LineNo, perr)
 	}
 
-	// 2 loops: finding and striping the  origin and some admin, and then actually reformatting.
-
-	single := map[string]int{}
-	longestname := 0
-	prevname := []byte{}
-	for _, e := range zf.Entries() {
+	// First pass: relative owner names and column widths.
+	nameWidth, ttlWidth, typeWidth := 0, 0, 0
+	entries := zf.Entries()
+	for i := range entries {
+		e := &entries[i]
 		if e.IsComment {
 			continue
 		}
@@ -32,245 +52,247 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 			}
 			continue
 		}
+		if e.RRType() == dns.TypeSOA {
+			if len(e.Values()) != 7 {
+				return fmt.Errorf("malformed SOA RR: %q", e.Values())
+			}
+			if len(origin) <= 1 && len(e.Domain()) > 0 { // $ORIGIN not set, take it from the SOA
+				origin = zonefile.Fqdn(e.Domain())
+			}
+		}
 
 		if err := e.SetDomain(StripOrigin(origin, e.Domain())); err != nil {
 			return fmt.Errorf("set domain: %w", err)
 		}
 
-		// count number of types per name, as we want to group singletons.
-		if !bytes.Equal(prevname, e.Domain()) && len(prevname) > 0 {
-			if len(e.Domain()) > 0 {
-				single[string(e.Domain())] += 1
-			} else {
-				single[string(prevname)] += 1
-			}
+		nameWidth = max(nameWidth, len(e.Domain()))
+		if ttl := e.TTL(); ttl != nil {
+			ttlWidth = max(ttlWidth, len(strconv.Itoa(*ttl)))
 		}
-
-		// Strip origin from selected records.
-		values := e.Values()
-		switch e.RRType() {
-		case dns.TypeSOA:
-			if len(values) < 3 {
-				return fmt.Errorf("malformed SOA RR: %v", values)
-			}
-			if len(origin) == 0 { // $ORIGIN not set take from SOA
-				origin = zonefile.Fqdn(e.Domain())
-			}
-
-			if err := e.SetValue(0, StripOrigin(origin, values[0])); err != nil {
-				return fmt.Errorf("set SOA mname: %w", err)
-			}
-			if err := e.SetValue(1, StripOrigin(origin, values[1])); err != nil {
-				return fmt.Errorf("set SOA rname: %w", err)
-			}
-
-		case dns.TypeSRV:
-			if len(values) < 4 {
-				return fmt.Errorf("malformed SRV RR: %v", values)
-			}
-			if err := e.SetValue(3, StripOrigin(origin, values[3])); err != nil {
-				return fmt.Errorf("set SRV target: %w", err)
-			}
-
-		case dns.TypeRRSIG:
-			if len(values) < 8 {
-				return fmt.Errorf("malformed RRSIG RR: %v", values)
-			}
-			if err := e.SetValue(7, StripOrigin(origin, values[7])); err != nil {
-				return fmt.Errorf("set RRSIG signer: %w", err)
-			}
-
-		case dns.TypeMX:
-			if len(values) < 2 {
-				return fmt.Errorf("malformed MX RR: %v", values)
-			}
-			if err := e.SetValue(1, StripOrigin(origin, values[1])); err != nil {
-				return fmt.Errorf("set MX exchange: %w", err)
-			}
-
-		case dns.TypePTR:
-			fallthrough
-		case dns.TypeNS:
-			fallthrough
-		case dns.TypeCNAME:
-			fallthrough
-		case dns.TypeNSEC:
-			if len(values) < 1 {
-				return fmt.Errorf("malformed RR: %v", values)
-			}
-			if err := e.SetValue(0, StripOrigin(origin, values[0])); err != nil {
-				return fmt.Errorf("set rr target: %w", err)
-			}
-		}
-
-		if l := len(e.Domain()); l > longestname {
-			longestname = l
-		}
-		if len(e.Domain()) > 0 {
-			prevname = e.Domain()
-		}
+		typeWidth = max(typeWidth, len(e.Type()))
 	}
-	longestname += 2 // extra indent (we already take the origin into account)
+	nameWidth = min(nameWidth, maxNameWidth)
 
-	prevname = []byte{}
-	prevtype := []byte{}
-	prevttl := 0
-	prevcom := false
-	firstname := true
-	for _, e := range zf.Entries() {
-		if e.IsComment {
-			if !prevcom && !firstname {
-				fmt.Fprintln(w)
-			}
+	f := formatter{w: w, nameWidth: nameWidth, ttlWidth: ttlWidth, typeWidth: typeWidth}
+
+	// Second pass: write. Blank lines are only written between other lines.
+	var prevname []byte
+	blank, wrote := false, false
+	for _, e := range entries {
+		if e.IsBlank() {
+			blank = wrote
+			prevname = nil
+			continue
+		}
+		if blank {
+			fmt.Fprintln(w)
+			blank = false
+		}
+		wrote = true
+
+		switch {
+		case e.IsComment:
 			for _, c := range e.Comments() {
 				fmt.Fprintf(w, "%s\n", c)
 			}
-			prevcom = true
-			prevname = []byte{}
-			prevtype = []byte{}
-			continue
-		}
-		if e.IsControl {
-			fmt.Fprintf(w, "%s %s\n", e.Command(), bytes.Join(e.Values(), []byte(" ")))
-			prevcom = false
-			prevname = []byte{}
-			prevtype = []byte{}
-			continue
-		}
+			prevname = nil
 
-		if !bytes.Equal(prevname, e.Domain()) {
-			// keep comments near, don't add a newline when previous line was comment.
-			// first record doesn't need a newline
-			if len(e.Domain()) > 0 && !prevcom && !firstname {
-				v, _ := single[string(prevname)]
-				// names /w multiple types get a newline
-				if v > 1 {
-					fmt.Fprintln(w)
-				}
-				// single type names together, except when types differ
-				if v == 1 && !bytes.Equal(prevtype, e.Type()) {
-					fmt.Fprintln(w)
-				}
+		case e.IsControl:
+			values := e.RawValues()
+			if bytes.Equal(e.Command(), []byte("$ORIGIN")) {
+				// The origin is used as absolute; a missing trailing dot
+				// would make other parsers read it relative to the zone.
+				values = append([][]byte{zonefile.Fqdn(values[0])}, values[1:]...)
 			}
-			fmt.Fprintf(w, "%-*s", longestname, e.Domain())
-		} else {
-			fmt.Fprintf(w, "%-*s", longestname, "")
-		}
-
-		prevcom = false
-		firstname = false
-
-		if ttl := e.TTL(); ttl != nil && *ttl != prevttl {
-			prevttl = *ttl
-			fmt.Fprintf(w, "%10s", TimeToHuman(ttl))
-		} else {
-			fmt.Fprintf(w, "%10s", " ")
-		}
-
-		if len(e.Class()) > 0 {
-			fmt.Fprintf(w, "%5s", e.Class())
-		} else {
-			fmt.Fprintf(w, "%5s", "IN")
-		}
-		fmt.Fprintf(w, "   %-8s", e.Type())
-
-		// Specicial handling for certain RR types
-		values := e.Values()
-		switch e.RRType() {
-		case dns.TypeTXT:
-			if len(values) <= 1 {
-				fmt.Fprintf(w, "%s%s\n", Space3, Quote(values[0]))
-				break
-			}
-
-			fmt.Fprintf(w, "%s(\n", Space3)
-			for _, v := range values {
-				fmt.Fprintf(w, "%-*s%s%s\n", longestname+Indent, " ", Space3, Quote(v))
-			}
-			closeBrace(w, longestname)
-
-		case dns.TypeCAA:
-			fmt.Fprintf(w, Space3)
-			space := ""
-			for i, v := range values {
-				if i < 2 {
-					fmt.Fprintf(w, "%s%s", space, v)
-				} else {
-					fmt.Fprintf(w, "%s%s", space, Quote(v))
-				}
-				space = " "
-			}
-			fmt.Fprintln(w)
-
-		case dns.TypeSOA:
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:2], []byte(" ")))
-			for i, v := range values[2:] {
-				if i == 0 {
-					if incrementSerial {
-						v = Increase(v)
-					}
-					humandate := SerialToHuman(v)
-					fmt.Fprintf(w, "%-*s%s%-13s%s%s\n", longestname+Indent, " ", Space3, v, soacomment[i], humandate)
-				} else {
-					fmt.Fprintf(w, "%-*s%s%-13s%s\n", longestname+Indent, " ", Space3, bytes.ToUpper(TimeToHumanByte(v)), soacomment[i])
-				}
-			}
-			closeBrace(w, longestname)
-
-		case dns.TypeTLSA:
-			fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(values, []byte(" ")))
-
-		case dns.TypeCDS, dns.TypeDS:
-			fallthrough
-		case dns.TypeCDNSKEY:
-			fallthrough
-		case dns.TypeDNSKEY:
-			if len(values) < 4 {
-				return fmt.Errorf("malformed RR: %v", values)
-			}
-			all := bytes.Join(values[3:], nil)
-			pieces := Split(all, 55)
-			if len(pieces) == 1 {
-				fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(e.Values(), []byte(" ")))
-				break
-			}
-
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:3], []byte(" ")))
-			for _, p := range pieces {
-				fmt.Fprintf(w, "%-*s%s%-13s\n", longestname+Indent, " ", Space3, p)
-			}
-			closeBrace(w, longestname)
-
-		case dns.TypeRRSIG:
-			fmt.Fprintf(w, "%s%s (\n", Space3, bytes.Join(values[:8], []byte(" ")))
-			all := bytes.Join(values[8:], nil)
-			pieces := Split(all, 55)
-			for _, p := range pieces {
-				fmt.Fprintf(w, "%-*s%s%-13s\n", longestname+Indent, " ", Space3, p)
-			}
-			closeBrace(w, longestname)
+			fmt.Fprintf(w, "%s %s%s\n", e.Command(), bytes.Join(values, []byte(" ")), trailing(e.Comments()))
+			prevname = nil
 
 		default:
-			fmt.Fprintf(w, "%s%s\n", Space3, bytes.Join(values, []byte(" ")))
+			// A record without owner inherits it and stays that way. A
+			// repeated owner is left blank, unless a comment, blank line or
+			// directive came in between.
+			name := e.Domain()
+			switch {
+			case len(name) == 0:
+			case prevname != nil && NameEqual(name, prevname):
+				name = nil
+			default:
+				prevname = name
+			}
+			if err := f.record(e, name, incrementSerial); err != nil {
+				return err
+			}
 		}
-
-		if len(e.Domain()) > 0 {
-			prevname = e.Domain()
-		}
-		prevtype = e.Type()
 	}
 	return nil
 }
 
-const (
-	Space3 = "   "
-	Indent = 29
-)
+type formatter struct {
+	w                              io.Writer
+	nameWidth, ttlWidth, typeWidth int
+}
+
+// record writes one resource record entry.
+func (f formatter) record(e zonefile.Entry, name []byte, incrementSerial bool) error {
+	prefix := fmt.Sprintf("%-*s ", f.nameWidth, name)
+	if f.ttlWidth > 0 {
+		ttl := ""
+		if t := e.TTL(); t != nil {
+			ttl = strconv.Itoa(*t)
+		}
+		prefix += fmt.Sprintf("%*s ", f.ttlWidth, ttl)
+	}
+	class := e.Class()
+	if len(class) == 0 {
+		class = []byte("IN")
+	}
+	prefix += fmt.Sprintf("%s %-*s ", class, f.typeWidth, e.Type())
+
+	values := e.Values()
+	raw := e.RawValues()
+	head, after := e.ValueComments()
+
+	switch e.RRType() {
+	case dns.TypeTXT, dns.TypeSPF:
+		quoted := make([][]byte, len(values))
+		for i, v := range values {
+			quoted[i] = []byte(Quote(v))
+		}
+		f.values(prefix, quoted, head, after, len(values) > 1)
+
+	case dns.TypeCAA:
+		rendered := slices.Clone(raw)
+		for i := 2; i < len(values); i++ {
+			rendered[i] = []byte(Quote(values[i]))
+		}
+		f.values(prefix, rendered, head, after, false)
+
+	case dns.TypeSOA:
+		f.soa(prefix, values, raw, head, after, incrementSerial)
+
+	case dns.TypeCDS, dns.TypeDS, dns.TypeCDNSKEY, dns.TypeDNSKEY, dns.TypeRRSIG:
+		n := 3
+		if e.RRType() == dns.TypeRRSIG {
+			n = 8
+		}
+		if len(values) < n+1 {
+			return fmt.Errorf("malformed %s RR: %q", e.Type(), values)
+		}
+		// Long base64 data is split over several lines; its comments go to
+		// the first line.
+		comments := trailing(append(head, slices.Concat(after...)...))
+		pieces := Split(bytes.Join(values[n:], nil), 55)
+		if len(pieces) == 1 {
+			fmt.Fprintf(f.w, "%s%s%s\n", prefix, bytes.Join(raw, []byte(" ")), comments)
+			break
+		}
+		fmt.Fprintf(f.w, "%s%s (%s\n", prefix, bytes.Join(raw[:n], []byte(" ")), comments)
+		for _, p := range pieces {
+			fmt.Fprintf(f.w, "%s%s\n", indent, p)
+		}
+		fmt.Fprintln(f.w, ")")
+
+	default:
+		f.values(prefix, raw, head, after, false)
+	}
+	return nil
+}
+
+// values writes record values after prefix. They stay on one line unless
+// multi is set or a comment precedes a value other than the last; then each
+// value gets its own indented line inside ( ), followed by its comments.
+func (f formatter) values(prefix string, values [][]byte, head [][]byte, after [][][]byte, multi bool) {
+	for i := 0; i+1 < len(after); i++ {
+		multi = multi || len(after[i]) > 0
+	}
+	multi = multi || len(head) > 0
+
+	if !multi {
+		var last [][]byte
+		if len(after) > 0 {
+			last = after[len(after)-1]
+		}
+		line := prefix + string(bytes.Join(values, []byte(" ")))
+		fmt.Fprintf(f.w, "%s%s\n", bytes.TrimRight([]byte(line), " "), trailing(last))
+		return
+	}
+
+	fmt.Fprintf(f.w, "%s(%s\n", prefix, trailing(head))
+	width := 0
+	for i, v := range values {
+		if len(after[i]) > 0 {
+			width = max(width, len(v))
+		}
+	}
+	for i, v := range values {
+		line := fmt.Sprintf("%s%-*s", indent, width, v)
+		fmt.Fprintf(f.w, "%s%s\n", bytes.TrimRight([]byte(line), " "), trailing(after[i]))
+	}
+	fmt.Fprintln(f.w, ")")
+}
+
+// soa writes the SOA record: mname and rname on the first line, then one
+// field per line with its comment. The serial always gets its date.
+func (f formatter) soa(prefix string, values, raw, head [][]byte, after [][][]byte, incrementSerial bool) {
+	fmt.Fprintf(f.w, "%s%s (%s\n", prefix, bytes.Join(raw[:2], []byte(" ")), trailing(append(head, slices.Concat(after[:2]...)...)))
+
+	fields := slices.Clone(raw[2:])
+	if incrementSerial {
+		fields[0] = Increase(values[2])
+	}
+	width := 0
+	for _, v := range fields {
+		width = max(width, len(v))
+	}
+
+	for i, v := range fields {
+		var comment string
+		if i == 0 {
+			comment = soacomment[0] + SerialToHuman(v)
+			for _, c := range after[2] {
+				if user := UserComment(c); len(user) > 0 {
+					comment += " " + string(user)
+				}
+			}
+		} else if len(after[i+2]) == 0 || isGeneratedSOAComment(after[i+2], i) {
+			comment = soacomment[i]
+		} else {
+			comment = string(bytes.Join(after[i+2], []byte(" ")))
+		}
+		fmt.Fprintf(f.w, "%s%-*s %s\n", indent, width, v, comment)
+	}
+	fmt.Fprintln(f.w, ")")
+}
 
 var soacomment = []string{"; serial", "; refresh", "; retry", "; expire", "; minimum"}
 
-func closeBrace(w io.Writer, longestname int) {
-	fmt.Fprintf(w, "%-*s)\n", longestname+Indent+3, " ")
+// isGeneratedSOAComment reports whether the comments of SOA field i are the
+// label dnsfmt writes itself (and should regenerate), not the user's.
+func isGeneratedSOAComment(comments [][]byte, i int) bool {
+	return len(comments) == 1 && string(comments[0]) == soacomment[i]
+}
+
+// generatedSerialRE matches the serial comment dnsfmt writes: "; serial"
+// optionally followed by the serial as a date.
+var generatedSerialRE = regexp.MustCompile(`^;\s*serial(?:\s+[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} UTC)?`)
+
+// UserComment returns the part of a comment that was not generated by dnsfmt:
+// for the SOA serial comment, whatever follows "; serial <date>". Other
+// comments are returned unchanged. The result may be empty.
+func UserComment(c []byte) []byte {
+	if loc := generatedSerialRE.FindIndex(c); loc != nil {
+		return bytes.TrimSpace(c[loc[1]:])
+	}
+	return c
+}
+
+// trailing renders comments for the end of a line (joined, as only one
+// comment fits on a line), or "" when there are none.
+func trailing(comments [][]byte) string {
+	if len(comments) == 0 {
+		return ""
+	}
+	return " " + string(bytes.Join(comments, []byte(" ")))
 }
 
 func Split(buf []byte, lim int) [][]byte {
@@ -286,15 +308,45 @@ func Split(buf []byte, lim int) [][]byte {
 	return chunks
 }
 
+// StripOrigin makes name relative to origin, or "@" for the origin itself.
+// Names outside the origin are returned unchanged; the suffix must match on
+// a label boundary (case-insensitively), so "myexample.com." is not taken
+// as part of "example.com.".
 func StripOrigin(origin, name []byte) []byte {
-	if len(origin) > 0 && bytes.HasSuffix(name, origin) {
-		// remove origin plus dot.
-		l := len(name)
-		if l == len(origin) {
-			return []byte("@")
-		} else {
-			return name[:l-len(origin)-1]
+	if len(origin) == 0 || len(name) < len(origin) {
+		return name
+	}
+	l := len(name) - len(origin)
+	if !NameEqual(name[l:], origin) {
+		return name
+	}
+	if l == 0 {
+		return []byte("@")
+	}
+	if name[l-1] != '.' || (l >= 2 && name[l-2] == '\\') {
+		return name
+	}
+	return name[:l-1]
+}
+
+// NameEqual compares DNS names case-insensitively for ASCII letters only
+// (RFC 4343). Unicode folding would treat different non-ASCII bytes (all
+// invalid UTF-8 decodes to U+FFFD) as equal.
+func NameEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if lowerASCII(a[i]) != lowerASCII(b[i]) {
+			return false
 		}
 	}
-	return name
+	return true
+}
+
+func lowerASCII(c byte) byte {
+	if 'A' <= c && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/miekg/dns"
+	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 	"github.com/vooon/zoneomatic/pkg/zonefile"
 	"go.opentelemetry.io/otel/attribute"
 )
@@ -123,7 +124,7 @@ func (s *DomainCtrl) DeleteRRSet(ctx context.Context, zoneName, name, typ string
 func (s *DomainCtrl) findExactZoneFile(zoneName string) *File {
 	zoneName = normalizeZoneName(zoneName)
 	for _, fl := range s.files {
-		if strings.EqualFold(normalizeZoneName(fl.origin), zoneName) {
+		if dnsfmt.NameEqual([]byte(normalizeZoneName(fl.origin)), []byte(zoneName)) {
 			return fl
 		}
 	}

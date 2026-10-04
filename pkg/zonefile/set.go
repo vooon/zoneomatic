@@ -3,6 +3,7 @@ package zonefile
 import (
 	"bytes"
 	"errors"
+	"slices"
 )
 
 func (t *token) SetValue(v []byte) {
@@ -23,7 +24,10 @@ func (t *token) SetValue(v []byte) {
 	t.val = tmp
 }
 
-// Set the the ith value of the entry
+// Set the the ith value of the entry.
+//
+// Entries are values: the mutators copy the token slice first, so other
+// copies of the entry (sharing its backing array) are never changed.
 func (e *Entry) SetValue(i int, v []byte) error {
 	if len(v) == 0 {
 		return errors.New("value must be non-empty")
@@ -32,6 +36,7 @@ func (e *Entry) SetValue(i int, v []byte) error {
 	if len(is) <= i {
 		return errors.New("index of value is too high")
 	}
+	e.tokens = slices.Clone(e.tokens)
 	e.tokens[is[i]].t.SetValue(v)
 	return nil
 }
@@ -42,6 +47,7 @@ func (e *Entry) SetDomain(v []byte) error {
 		return errors.New("control entry does not have a domain")
 	}
 	is := e.find(useDomain)
+	e.tokens = slices.Clone(e.tokens)
 
 	if len(is) == 1 {
 		// If there is a domain item, simply change its value

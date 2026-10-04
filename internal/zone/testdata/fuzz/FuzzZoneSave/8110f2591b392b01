@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("$ORIGIN 0\n$TTL 0\n SOA 0 0 (0 0 0 0 0 )\n0 TA 0 0 00\n$ORIGIN 1\n TXT 0")
