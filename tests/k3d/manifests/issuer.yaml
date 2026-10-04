@@ -1,0 +1,33 @@
+# Applied after cert-manager is installed (needs its CRDs). Mirrors the
+# ClusterIssuer used by the k3s fleet: rfc2136 solver, hostname nameserver,
+# HMACSHA256 TSIG key.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zoneomatic-tsig
+  namespace: cert-manager
+type: Opaque
+stringData:
+  # Test-only key, matches tsig.conf in zoneomatic.yaml.
+  secret: "YUC1CxoGAbBCF2oXof/bRu8UGkyp1KViUugjBX6060I="
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: zoneomatic-pebble
+spec:
+  acme:
+    server: https://pebble.zoneomatic-e2e.svc.cluster.local:14000/dir
+    # Pebble serves a self-signed test certificate.
+    skipTLSVerify: true
+    privateKeySecretRef:
+      name: zoneomatic-pebble-account
+    solvers:
+      - dns01:
+          rfc2136:
+            nameserver: zoneomatic.zoneomatic-e2e.svc.cluster.local:5353
+            tsigKeyName: certmgr.example.com
+            tsigAlgorithm: HMACSHA256
+            tsigSecretSecretRef:
+              name: zoneomatic-tsig
+              key: secret

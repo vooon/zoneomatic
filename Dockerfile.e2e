@@ -1,0 +1,12 @@
+FROM golang:1.26-alpine AS builder
+WORKDIR /build
+COPY go.mod go.sum ./
+COPY pkg/dnsfmt/go.mod pkg/dnsfmt/go.sum pkg/dnsfmt/
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o zoneomatic ./cmd/zoneomatic
+
+# alpine (not scratch) so the test can read the zone file with kubectl exec.
+FROM alpine:3.22
+COPY --from=builder /build/zoneomatic /usr/local/bin/zoneomatic
+ENTRYPOINT ["zoneomatic"]

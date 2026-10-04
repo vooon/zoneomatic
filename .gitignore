@@ -31,3 +31,6 @@ go.work.sum
 # doc/openapi.json
 dist/
 vendor/
+
+# k3d test cluster kubeconfig (make k3d-cluster)
+.k3d-kubeconfig

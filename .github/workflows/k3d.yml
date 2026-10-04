@@ -1,0 +1,69 @@
+name: cert-manager k3d Test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k3d-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  K3D_VERSION: v5.8.3
+
+jobs:
+  k3d:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install k3d
+        run: |
+          curl -fsSL -o /usr/local/bin/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64"
+          chmod +x /usr/local/bin/k3d
+          k3d version
+
+      - name: Create cluster
+        run: make k3d-cluster
+
+      - name: Build and load image
+        run: make k3d-build
+
+      - name: Deploy zoneomatic, Pebble and cert-manager
+        run: make k3d-deploy
+
+      - name: Run cert-manager rfc2136 test
+        run: make k3d-test
+
+      - name: Debug on failure
+        if: failure()
+        env:
+          KUBECONFIG: ${{ github.workspace }}/.k3d-kubeconfig
+        run: |
+          echo "=== Pods ==="
+          kubectl get pods -A -o wide || true
+          echo "=== cert-manager resources ==="
+          kubectl -n zoneomatic-e2e describe certificates,certificaterequests,orders,challenges || true
+          echo "=== zoneomatic logs ==="
+          kubectl -n zoneomatic-e2e logs deployment/zoneomatic -c zoneomatic --tail=200 || true
+          echo "=== zone file ==="
+          kubectl -n zoneomatic-e2e exec deployment/zoneomatic -c zoneomatic -- cat /zones/at.example.com.zone || true
+          echo "=== cert-manager logs ==="
+          kubectl -n cert-manager logs deployment/cert-manager --tail=200 || true
+          echo "=== pebble logs ==="
+          kubectl -n zoneomatic-e2e logs deployment/pebble --tail=100 || true

@@ -2,7 +2,7 @@ $ORIGIN at.example.com.
 $TTL 60
 ; SOA Record
 @                                 IN   SOA        ns1.example.com. hostmaster.example.com. (
-                                                     1763822929   ; serial  Sun, 29 Oct 1769 06:46:00 UTC
+                                                     1763822929   ; serial  Sat, 22 Nov 2025 14:48:49 UTC
                                                      1H           ; refresh
                                                      600          ; retry
                                                      1W           ; expire
@@ -20,4 +20,3 @@ loop                              IN   A          127.0.0.1
 ; sub-domain challenge
 _acme-challenge.zot               IN   TXT        "8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs"
 _acme-challenge                   IN   TXT        "placeholder"
-                                  IN   TXT        "placeholder"

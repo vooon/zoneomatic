@@ -179,13 +179,13 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 		switch e.RRType() {
 		case dns.TypeTXT:
 			if len(values) <= 1 {
-				fmt.Fprintf(w, "%s%q\n", Space3, values[0])
+				fmt.Fprintf(w, "%s%s\n", Space3, Quote(values[0]))
 				break
 			}
 
 			fmt.Fprintf(w, "%s(\n", Space3)
 			for _, v := range values {
-				fmt.Fprintf(w, "%-*s%s%q\n", longestname+Indent, " ", Space3, v)
+				fmt.Fprintf(w, "%-*s%s%s\n", longestname+Indent, " ", Space3, Quote(v))
 			}
 			closeBrace(w, longestname)
 
@@ -196,7 +196,7 @@ func Reformat(data, origin []byte, w io.Writer, incrementSerial bool) error {
 				if i < 2 {
 					fmt.Fprintf(w, "%s%s", space, v)
 				} else {
-					fmt.Fprintf(w, "%s%q", space, v)
+					fmt.Fprintf(w, "%s%s", space, Quote(v))
 				}
 				space = " "
 			}

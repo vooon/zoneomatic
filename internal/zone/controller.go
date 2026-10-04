@@ -28,10 +28,42 @@ var (
 	ErrNoMatchers     = errors.New("no record matchers provided")
 	ErrOriginChanged  = errors.New("zone origin changed")
 	ErrZoneNotFound   = errors.New("zone not found")
+	// ErrInvalidACMEToken is returned for a challenge value that is not a
+	// base64url ACME key authorization digest.
+	ErrInvalidACMEToken = errors.New("invalid ACME challenge token")
 )
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
 const EmptyPlaceholder = "placeholder"
+
+// ValidACMEToken reports whether v may be stored as an ACME dns-01 TXT value.
+// Real values are the 43-character base64url SHA-256 digest of the key
+// authorization (RFC 8555, section 8.4); anything else is rejected so that
+// clients allowed to answer challenges cannot write arbitrary text into the
+// zone. The empty string (no value) and EmptyPlaceholder are also accepted.
+func ValidACMEToken(v string) bool {
+	if v == "" || v == EmptyPlaceholder {
+		return true
+	}
+	if len(v) > 255 {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if !isBase64URLChar(v[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isBase64URLChar(c byte) bool {
+	switch {
+	case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		return true
+	default:
+		return c == '-' || c == '_'
+	}
+}
 
 // Controller implements zone file modification methods
 type Controller interface {
@@ -201,6 +233,11 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 	}()
 
 	lg := slog.Default().With("domain", domain)
+
+	if !ValidACMEToken(newToken) || !ValidACMEToken(oldToken) {
+		err = ErrInvalidACMEToken
+		return err
+	}
 
 	domainDot := domain
 	if !strings.HasSuffix(domainDot, ".") {
@@ -913,6 +950,7 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	defer s.mu.Unlock()
 
 	lg := s.lg.With("domain", domain, "old_token", oldToken, "new_token", newToken)
+	cleanup := newToken == "" && oldToken != ""
 	if newToken == "" {
 		lg.Warn("Use placeholder for empty TXT record")
 		newToken = EmptyPlaceholder
@@ -929,6 +967,11 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 
 	values, err := parseEntries(newentbuf)
 	if err != nil {
+		return err
+	}
+
+	if cleanup {
+		_, err = s.cleanupACMEChallenge(ctx, lg, shortDomain, oldToken, values)
 		return err
 	}
 
@@ -953,6 +996,61 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	}
 
 	return nil
+}
+
+// cleanupACMEChallenge removes a single challenge token while keeping exactly
+// one placeholder TXT entry for the name. The token entry is replaced by the
+// placeholder only when no placeholder is left; otherwise it is dropped, and
+// duplicate placeholders (e.g. from earlier cleanups) are collapsed. If the
+// name has no TXT entry at all, a placeholder is added. Callers must hold s.mu.
+func (s *File) cleanupACMEChallenge(ctx context.Context, lg *slog.Logger, shortDomain []byte, token string, placeholder []zonefile.Entry) (changed bool, err error) {
+	zf, _, err := s.load()
+	if err != nil {
+		return false, err
+	}
+
+	oldEntries := zf.Entries()
+	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
+
+	hasPlaceholder := false
+	firstDropped := -1
+	for _, ent := range oldEntries {
+		if ent.IsComment || ent.IsControl || ent.RRType() != dns.TypeTXT || !dnsNamesEqual(ent.Domain(), shortDomain) {
+			newEntries = append(newEntries, ent)
+			continue
+		}
+
+		switch val := string(bytes.Join(ent.Values(), nil)); val {
+		case token:
+			if firstDropped < 0 {
+				firstDropped = len(newEntries)
+			}
+			continue
+		case EmptyPlaceholder:
+			if hasPlaceholder {
+				lg.DebugContext(ctx, "Drop duplicate placeholder")
+				continue
+			}
+			hasPlaceholder = true
+		}
+
+		newEntries = append(newEntries, ent)
+	}
+
+	if !hasPlaceholder {
+		switch {
+		case firstDropped >= 0:
+			newEntries = slices.Insert(newEntries, firstDropped, placeholder...)
+		default:
+			if idx := anchorInsertIndex(newEntries, shortDomain); idx >= 0 {
+				newEntries = slices.Insert(newEntries, idx+1, placeholder...)
+			} else {
+				newEntries = append(newEntries, placeholder...)
+			}
+		}
+	}
+
+	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
 }
 
 func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, newValues []string) (changed bool, err error) {
@@ -1196,8 +1294,9 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 	}
 }
 
+// quoteTXT renders a raw value as a quoted zone file string; see dnsfmt.Quote.
 func quoteTXT(v string) string {
-	return fmt.Sprintf(` "%s" `, strings.ReplaceAll(v, `"`, `\"`))
+	return " " + dnsfmt.Quote([]byte(v)) + " "
 }
 
 func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {
