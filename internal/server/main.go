@@ -19,30 +19,41 @@ import (
 )
 
 type Cli struct {
-	Listen             string           `name:"listen" default:"localhost:9999" help:"Server listen address"`
-	AcceptProxy        bool             `name:"accept-proxy" help:"Accept PROXY protocol"`
-	ProxyHeaderTimeout time.Duration    `name:"proxy-header-timeout" default:"10s" help:"Timeout for PROXY headers"`
-	HTPasswdFile       string           `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" help:"Passwords file (bcrypt only)"`
-	ZoneFiles          []string         `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." help:"Zone files to update"`
-	AcmeTTL            int              `name:"acme-ttl" default:"0" help:"TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL"`
-	DDNSManagePTR      bool             `name:"ddns-manage-ptr" help:"Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored"`
-	Debug              bool             `name:"debug" help:"Enable debug logging"`
-	Version            kong.VersionFlag `help:"Print version and exit"`
+	Debug   bool             `name:"debug" help:"Enable debug logging"`
+	Version kong.VersionFlag `help:"Print version and exit"`
 
-	RFC2136ACME RFC2136ListenerConfig `embed:"" prefix:"rfc2136-acme-" envprefix:"ZM_RFC2136_ACME_"`
-	RFC2136Upd  RFC2136ListenerConfig `embed:"" prefix:"rfc2136-update-" envprefix:"ZM_RFC2136_UPDATE_"`
+	ZoneFiles     []string `short:"z" name:"zone" required:"" type:"existingfile" placeholder:"FILE,..." group:"zones" help:"Zone files to manage (comma-separated or repeated); each needs a SOA record"`
+	AcmeTTL       int      `name:"acme-ttl" default:"0" group:"zones" help:"TTL (seconds) of ACME challenge TXT records; 0 = zone $TTL"`
+	DDNSManagePTR bool     `name:"ddns-manage-ptr" group:"zones" help:"On DDNS updates also update PTR records in matching reverse zones (skipped when none exists)"`
 
-	RFC2136UpdateMaxTTL int `name:"rfc2136-update-max-ttl" env:"ZM_RFC2136_UPDATE_MAX_TTL" default:"0" help:"Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL"`
+	Listen             string        `name:"listen" default:"localhost:9999" group:"http" help:"HTTP API listen address"`
+	HTPasswdFile       string        `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" group:"http" help:"htpasswd file with API users (bcrypt hashes only)"`
+	AcceptProxy        bool          `name:"accept-proxy" group:"http" help:"Expect PROXY protocol headers (only behind a trusted proxy/LB)"`
+	ProxyHeaderTimeout time.Duration `name:"proxy-header-timeout" default:"10s" group:"http" help:"Timeout for reading PROXY protocol headers"`
 
-	OTEL OTelConfig `embed:"" prefix:"otel-"`
+	RFC2136ACME RFC2136ListenerConfig `embed:"" prefix:"rfc2136-acme-" envprefix:"ZM_RFC2136_ACME_" group:"rfc2136-acme"`
+	RFC2136Upd  RFC2136ListenerConfig `embed:"" prefix:"rfc2136-update-" envprefix:"ZM_RFC2136_UPDATE_" group:"rfc2136-update"`
+
+	RFC2136UpdateMaxTTL int `name:"rfc2136-update-max-ttl" env:"ZM_RFC2136_UPDATE_MAX_TTL" default:"0" group:"rfc2136-update" help:"Cap the TTL (seconds) of written records; 0 = use the TTL from the update"`
+
+	OTEL OTelConfig `embed:"" prefix:"otel-" group:"otel"`
+}
+
+// helpGroups orders and titles the flag groups in --help.
+var helpGroups = []kong.Group{
+	{Key: "zones", Title: "Zones"},
+	{Key: "http", Title: "HTTP API (DDNS, ACME, PowerDNS-compatible)"},
+	{Key: "rfc2136-acme", Title: "RFC2136 ACME listener (only _acme-challenge TXT records, e.g. for cert-manager)"},
+	{Key: "rfc2136-update", Title: "RFC2136 full-update listener (any record in the zones)"},
+	{Key: "otel", Title: "OpenTelemetry"},
 }
 
 // RFC2136ListenerConfig holds the flags for one RFC2136 listener. The same
 // options are embedded twice: for the ACME dns-01 listener and for the
 // full-zone update listener.
 type RFC2136ListenerConfig struct {
-	Listen   string         `name:"listen" env:"LISTEN" help:"Listen address (host:port); empty disables the listener"`
-	TSIGFile string         `name:"tsig-file" env:"TSIG_FILE" type:"existingfile" placeholder:"FILE" help:"BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set"`
+	Listen   string         `name:"listen" env:"LISTEN" placeholder:"HOST:PORT" help:"UDP and TCP listen address; empty disables the listener"`
+	TSIGFile string         `name:"tsig-file" env:"TSIG_FILE" type:"existingfile" placeholder:"FILE" help:"TSIG key file in BIND format (tsig-keygen output); required with listen"`
 	Allow    []netip.Prefix `name:"allow" env:"ALLOW" sep:"," placeholder:"CIDR" help:"Allowed client CIDRs (comma-separated or repeated); empty allows all"`
 }
 
@@ -50,7 +61,8 @@ func Main() {
 	var cli Cli
 
 	kctx := kong.Parse(&cli,
-		kong.Description("DNS Zone file updater"),
+		kong.Description("Updates DNS zone files on request: DDNS, ACME dns-01 (acme-dns, LEGO, RFC2136), PowerDNS-compatible API."),
+		kong.ExplicitGroups(helpGroups),
 		kong.DefaultEnvars("ZM"),
 		kong.Vars{"version": buildinfo.String()},
 	)
