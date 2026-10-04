@@ -229,6 +229,8 @@ func (h *rfc2136Handler) applyRR(ctx context.Context, zoneName string, rr dns.RR
 	hdr := rr.Header()
 
 	typeName := strings.ToUpper(dns.TypeToString[hdr.Rrtype])
+	h.lg.InfoContext(ctx, "RFC2136 update record", "zone", zoneName, "name", hdr.Name, "type", typeName, "class", dns.ClassToString[hdr.Class])
+
 	if !h.allowsRR(hdr) {
 		return reject(dns.RcodeRefused, "update for %s %s is not allowed on the ACME listener", hdr.Name, typeName)
 	}
@@ -280,6 +282,12 @@ func (h *rfc2136Handler) removeRR(ctx context.Context, rr dns.RR) error {
 func (h *rfc2136Handler) removeRRSet(ctx context.Context, zoneName string, rr dns.RR) error {
 	hdr := rr.Header()
 
+	if h.acmeOnly {
+		// RRset (TXT) or name (ANY) delete: reset the challenge to a single
+		// placeholder instead of dropping the entry from the zone file.
+		return h.zctl.UpdateACMEChallenge(ctx, hdr.Name, "", "")
+	}
+
 	if hdr.Rrtype == dns.TypeANY {
 		_, err := h.zctl.RemoveRecordName(ctx, hdr.Name)
 		return err
@@ -320,13 +328,14 @@ func (h *rfc2136Handler) allowed(addr net.Addr) bool {
 
 // allowsRR reports whether the update record may be applied on this listener.
 // A generic listener allows everything; an ACME listener only allows
-// _acme-challenge.* TXT records.
+// _acme-challenge.* TXT records, plus name deletes (ClassANY + TypeANY) there.
 func (h *rfc2136Handler) allowsRR(hdr *dns.RR_Header) bool {
 	if !h.acmeOnly {
 		return true
 	}
 
-	if hdr.Rrtype != dns.TypeTXT {
+	nameDelete := hdr.Class == dns.ClassANY && hdr.Rrtype == dns.TypeANY
+	if hdr.Rrtype != dns.TypeTXT && !nameDelete {
 		return false
 	}
 

@@ -456,6 +456,11 @@ address is set and requires a TSIG key file:
 
 Both listeners serve UDP and TCP on the same address.
 
+On the ACME listener, adding a TXT value replaces the placeholder, removing a
+value puts the placeholder back, and deleting the whole TXT RRset or name
+(`nsupdate`'s `update delete _acme-challenge.example.com. [TXT]`) resets the
+name to a single placeholder instead of removing it from the zone file.
+
 ### TSIG keys
 
 Keys are read from a BIND-style key file, exactly as produced by `tsig-keygen`

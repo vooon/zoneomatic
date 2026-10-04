@@ -102,6 +102,48 @@ func TestRFC2136_ACME_PresentAndCleanup(t *testing.T) {
 	assert.Empty(t, zctl.acmeCalls[1].newToken)
 }
 
+func TestRFC2136_ACME_DeleteResetsToPlaceholder(t *testing.T) {
+	zctl := newFakeCtrl()
+	h := &rfc2136Handler{zctl: zctl, acmeOnly: true, lg: discardLogger()}
+
+	remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 12345}
+	rr := acmeTXT("_acme-challenge.example.com.", "token-1")
+
+	// RRset delete (ClassANY + TXT)
+	m := new(dns.Msg)
+	m.SetUpdate("example.com.")
+	m.RemoveRRset([]dns.RR{rr})
+	assert.Equal(t, dns.RcodeSuccess, runUpdate(t, h, remote, m))
+
+	// name delete (ClassANY + ANY)
+	m = new(dns.Msg)
+	m.SetUpdate("example.com.")
+	m.RemoveName([]dns.RR{rr})
+	assert.Equal(t, dns.RcodeSuccess, runUpdate(t, h, remote, m))
+
+	require.Len(t, zctl.acmeCalls, 2)
+	for _, c := range zctl.acmeCalls {
+		assert.Equal(t, "_acme-challenge.example.com.", c.domain)
+		assert.Empty(t, c.newToken)
+		assert.Empty(t, c.oldToken)
+	}
+	assert.Empty(t, zctl.deleted)
+	assert.Empty(t, zctl.removeName)
+}
+
+func TestRFC2136_ACME_RejectsForeignNameDelete(t *testing.T) {
+	zctl := newFakeCtrl()
+	h := &rfc2136Handler{zctl: zctl, acmeOnly: true, lg: discardLogger()}
+
+	remote := &net.TCPAddr{IP: net.IPv4(10, 0, 0, 5), Port: 12345}
+	m := new(dns.Msg)
+	m.SetUpdate("example.com.")
+	m.RemoveName([]dns.RR{acmeTXT("www.example.com.", "x")})
+	assert.Equal(t, dns.RcodeRefused, runUpdate(t, h, remote, m))
+	assert.Empty(t, zctl.acmeCalls)
+	assert.Empty(t, zctl.removeName)
+}
+
 func TestRFC2136_ACME_RejectsForeignName(t *testing.T) {
 	zctl := newFakeCtrl()
 	h := &rfc2136Handler{zctl: zctl, acmeOnly: true, lg: discardLogger()}
