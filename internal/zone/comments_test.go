@@ -119,3 +119,46 @@ func TestComments_SerialDateKept(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(string(out), "bump on every change"), "%s", out)
 	assert.Contains(t, string(out), "refresh note")
 }
+
+func TestMultipleOrigins(t *testing.T) {
+	src := `$ORIGIN example.com.
+$TTL 60
+@     IN SOA ns1.example.com. hostmaster.example.com. 1763822925 1H 600 1W 1D
+@     IN NS  ns1.example.com.
+host  IN A   192.0.2.1 ; apex host
+
+$ORIGIN sub.example.com.
+host  IN A   192.0.2.2 ; sub host
+      IN TXT "inherits host.sub"
+`
+	p := filepath.Join(t.TempDir(), "example.com.zone")
+	require.NoError(t, os.WriteFile(p, []byte(src), 0o644))
+	ctrl, err := New(p)
+	require.NoError(t, err)
+
+	zones, err := ctrl.ListZones(context.TODO())
+	require.NoError(t, err)
+	require.Equal(t, "example.com.", zones[0].Name, "origin is the SOA apex, not the last $ORIGIN")
+
+	ctx := context.TODO()
+	require.NoError(t, ctrl.UpdateDDNSAddress(ctx, "host.sub.example.com.", []netip.Addr{netip.MustParseAddr("192.0.2.22")}))
+	require.NoError(t, ctrl.UpdateACMEChallenge(ctx, "_acme-challenge.example.com.", "tok", EmptyPlaceholder))
+
+	out, err := os.ReadFile(p)
+	require.NoError(t, err)
+	got, err := zoneRecords("example.com.", out)
+	require.NoError(t, err, "%s", out)
+
+	for _, rr := range []string{
+		"host.example.com.\t60\tin\ta\t192.0.2.1",
+		"host.sub.example.com.\t60\tin\ta\t192.0.2.22",
+		"host.sub.example.com.\t60\tin\ttxt\t\"inherits host.sub\"",
+		"_acme-challenge.example.com.\t60\tin\ttxt\t\"tok\"",
+	} {
+		assert.Equal(t, 1, got[rr], "missing %s in:\n%s", rr, out)
+	}
+	assert.Zero(t, got["host.sub.example.com.\t60\tin\ta\t192.0.2.2"], "old sub address must be replaced:\n%s", out)
+	assert.Contains(t, string(out), "apex host")
+	assert.Contains(t, string(out), "sub host")
+	assert.Contains(t, string(out), "$ORIGIN sub.example.com.")
+}

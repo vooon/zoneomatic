@@ -2,6 +2,7 @@ package zone
 
 import (
 	"context"
+	"flag"
 	"log/slog"
 	"net/netip"
 	"os"
@@ -610,14 +611,21 @@ func newZoneTempWithOpts(t *testing.T, file string, opts ...Option) *File {
 	return dct.files[0]
 }
 
+// updateGolden rewrites the expected files: go test ./internal/zone -update
+var updateGolden = flag.Bool("update", false, "update golden files")
+
 func assertFiles(t *testing.T, expectedFile, obtainedFile string, msgAndArgs ...any) bool {
 	t.Helper()
 	require := require.New(t)
 
-	b1, err := os.ReadFile(expectedFile)
+	b2, err := os.ReadFile(obtainedFile)
 	require.NoError(err)
 
-	b2, err := os.ReadFile(obtainedFile)
+	if *updateGolden {
+		require.NoError(os.WriteFile(expectedFile, b2, 0o644))
+	}
+
+	b1, err := os.ReadFile(expectedFile)
 	require.NoError(err)
 
 	return assert.Equal(t, string(b1), string(b2), msgAndArgs...)
@@ -698,4 +706,10 @@ func TestDomainCtrl_UpdateACMEChallenge_RejectsInvalidToken(t *testing.T) {
 	after, err := os.ReadFile(f.path)
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after))
+}
+
+func TestDNSNamesEqual_NonASCII(t *testing.T) {
+	assert.True(t, dnsNamesEqual([]byte("WWW.example.com."), []byte("www.Example.com.")))
+	assert.False(t, dnsNamesEqual([]byte("\xcd.example.com."), []byte("\xf0.example.com.")))
+	assert.False(t, domainMatchesOrigin("\xcd.", "\xf0."))
 }

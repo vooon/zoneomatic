@@ -1,18 +1,18 @@
 $ORIGIN 3.2.1.in-addr.arpa.
 $TTL 60
 ; SOA Record
-@               IN   SOA        ns1.example.com. hostmaster.example.com. (
-                                   1763822926   ; serial  Sat, 22 Nov 2025 14:48:46 UTC
-                                   1H           ; refresh
-                                   600          ; retry
-                                   1W           ; expire
-                                   1D           ; minimum
-                                   )
+@ IN SOA ns1.example.com. hostmaster.example.com. (
+    1763822926 ; serial  Sat, 22 Nov 2025 14:48:46 UTC
+    1H         ; refresh
+    600        ; retry
+    1W         ; expire
+    1D         ; minimum
+)
 
 ; NS Records
-@               IN   NS         ns1.example.com.
-                IN   NS         ns2.example.com.
+@ IN NS  ns1.example.com.
+  IN NS  ns2.example.com.
 
 ; PTR records
-1               IN   PTR        router.example.com.
-4               IN   PTR        clean.example.com.
+1 IN PTR router.example.com.
+4 IN PTR clean.example.com.

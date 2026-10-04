@@ -365,9 +365,22 @@ func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDo
 	return best
 }
 
+// lowerASCII lowercases ASCII letters only, as DNS name comparison does
+// (RFC 4343); strings.ToLower would map all invalid UTF-8 to U+FFFD.
+// It works on bytes: strings.Map would also replace invalid UTF-8.
+func lowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 func domainMatchesOrigin(domain, origin string) bool {
-	domain = strings.ToLower(normalizeZoneName(domain))
-	origin = strings.ToLower(normalizeZoneName(origin))
+	domain = lowerASCII(normalizeZoneName(domain))
+	origin = lowerASCII(normalizeZoneName(origin))
 
 	if domain == origin {
 		return true
@@ -398,7 +411,7 @@ func (m Matcher) Match(e zonefile.Entry) bool {
 }
 
 func dnsNamesEqual(a, b []byte) bool {
-	return strings.EqualFold(normalizeZoneName(string(a)), normalizeZoneName(string(b)))
+	return dnsfmt.NameEqual([]byte(normalizeZoneName(string(a))), []byte(normalizeZoneName(string(b))))
 }
 
 func (m Matcher) String() string {
@@ -439,46 +452,58 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 		return nil, nil, zfErr
 	}
 
-	ok := false
-	origin := ""
-	prevDomain := []byte{}
+	// The zone apex is the SOA owner, resolved against the $ORIGIN in effect
+	// there. Names before the first $ORIGIN are relative to the apex.
 	entries := zf.Entries()
+	cur := s.origin
+	prev := ""
+	origin := ""
 	for i := range entries {
 		ent := &entries[i]
-		if ent.IsComment {
-			continue
-		}
-
-		if ent.IsControl {
+		switch {
+		case ent.IsComment:
+		case ent.IsControl:
 			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-				origin = string(zonefile.Fqdn(ent.Values()[0]))
+				cur = string(zonefile.Fqdn(ent.Values()[0]))
 			}
-			continue
-		}
-
-		dom := ent.Domain()
-		if dom != nil {
-			prevDomain = dom
-		} else {
-			dom = prevDomain
-		}
-
-		err = ent.SetDomain(dnsfmt.StripOrigin([]byte(s.origin), dom))
-		if err != nil {
-			return
-		}
-
-		if ent.RRType() == dns.TypeSOA {
-			soa = ent
-			ok = true
+		default:
+			if dom := string(ent.Domain()); dom != "" {
+				prev = absName(dom, cur)
+			}
+			if ent.RRType() == dns.TypeSOA && origin == "" {
+				origin = prev
+				soa = ent
+			}
 		}
 	}
-	if !ok {
+	if soa == nil {
 		return nil, nil, ErrSoaNotFound
 	}
+	if !dns.IsFqdn(origin) {
+		return nil, nil, fmt.Errorf("%w: cannot determine the zone origin, set $ORIGIN or use an absolute SOA owner", ErrSoaNotFound)
+	}
 
-	if origin == "" {
-		origin = string(soa.Domain())
+	// Give every record an explicit owner, relative to the apex (absolute
+	// when outside of it). Inherited owners and later $ORIGIN directives are
+	// resolved first, so the name means the same wherever it is printed.
+	cur = origin
+	prev = ""
+	for i := range entries {
+		ent := &entries[i]
+		switch {
+		case ent.IsComment:
+		case ent.IsControl:
+			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
+				cur = string(zonefile.Fqdn(ent.Values()[0]))
+			}
+		default:
+			if dom := string(ent.Domain()); dom != "" {
+				prev = absName(dom, cur)
+			}
+			if err = ent.SetDomain([]byte(StripOrigin(prev, origin))); err != nil {
+				return
+			}
+		}
 	}
 
 	if s.origin == "" {
@@ -487,8 +512,6 @@ func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
 	} else if s.origin != origin {
 		return nil, nil, fmt.Errorf("%w: prev=%s new=%s", ErrOriginChanged, s.origin, origin)
 	}
-
-	// PrintEntries(zf.Entries(), os.Stdout)
 
 	return
 }
@@ -596,7 +619,7 @@ func (s *File) saveIfChanged(ctx context.Context, lg *slog.Logger, oldEntries, n
 	}
 
 	uglyBuf := bytes.NewBuffer(nil)
-	PrintEntries(newEntries, uglyBuf)
+	PrintEntries(s.origin, newEntries, uglyBuf)
 
 	ret := bytes.NewBuffer(nil)
 	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
@@ -1274,7 +1297,7 @@ func StripOrigin(name, origin string) string {
 		return name
 	}
 
-	if strings.EqualFold(nameFQDN, originFQDN) {
+	if dnsfmt.NameEqual([]byte(nameFQDN), []byte(originFQDN)) {
 		return "@"
 	}
 
@@ -1288,9 +1311,33 @@ func StripOrigin(name, origin string) string {
 	return nameFQDN[:l1-l2-1]
 }
 
-func PrintEntries(entries []zonefile.Entry, w io.Writer) {
+// absName resolves a (possibly relative) owner name against origin.
+func absName(name, origin string) string {
+	switch {
+	case name == "@":
+		return origin
+	case dns.IsFqdn(name):
+		return name
+	case origin == "" || origin == ".":
+		return name + "."
+	default:
+		return name + "." + origin
+	}
+}
+
+// PrintEntries writes entries as a plain zone file. Owner names are taken as
+// relative to the zone origin (as load sets them) and written relative to
+// the $ORIGIN in effect at their line.
+func PrintEntries(origin string, entries []zonefile.Entry, w io.Writer) {
+	cur := origin
 	for _, e := range entries {
-		if e.IsComment {
+		if e.IsControl && bytes.Equal(e.Command(), []byte("$ORIGIN")) {
+			cur = string(zonefile.Fqdn(e.Values()[0]))
+		}
+		if e.IsBlank() {
+			fmt.Fprintln(w) // nolint:errcheck
+			continue
+		} else if e.IsComment {
 			for _, c := range e.Comments() {
 				fmt.Fprintf(w, "%s\n", c) // nolint:errcheck
 			}
@@ -1309,7 +1356,11 @@ func PrintEntries(entries []zonefile.Entry, w io.Writer) {
 			continue
 		}
 
-		fmt.Fprintf(w, "%s ", e.Domain()) // nolint:errcheck
+		if name := string(e.Domain()); name != "" {
+			fmt.Fprintf(w, "%s ", StripOrigin(absName(name, origin), cur)) // nolint:errcheck
+		} else {
+			fmt.Fprint(w, " ") // nolint:errcheck
+		}
 		if ttl := e.TTL(); ttl != nil {
 			fmt.Fprintf(w, " %d ", *ttl) // nolint:errcheck
 		}

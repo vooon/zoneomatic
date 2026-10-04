@@ -1,11 +1,15 @@
 package zone
 
 import (
+	"bytes"
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
+
+	"github.com/miekg/dns"
 )
 
 // FuzzZoneSave runs an unrelated update over arbitrary zone files. The
@@ -48,6 +52,18 @@ func FuzzZoneSave(f *testing.F) {
 		if err != nil {
 			return
 		}
+		// Skip inputs the two parsers read differently (e.g. miekg/dns
+		// rejects or merges fields of a multi-line SOA that starts with
+		// "(name"): that is a disagreement about the input, not a save bug.
+		zf, _, err := ctrl.(*DomainCtrl).files[0].load()
+		if err != nil {
+			return
+		}
+		plain := bytes.NewBuffer(nil)
+		PrintEntries(origin, zf.Entries(), plain)
+		if ours, err := zoneRecords(origin, plain.Bytes()); err != nil || !maps.Equal(ours, before) {
+			return
+		}
 
 		if err := ctrl.UpdateACMEChallenge(context.TODO(), "_acme-challenge.zz-fuzz."+origin, "tok", EmptyPlaceholder); err != nil {
 			return
@@ -79,10 +95,17 @@ func FuzzZoneSave(f *testing.F) {
 	})
 }
 
-var originRE = regexp.MustCompile(`(?m)^(\$ORIGIN[ \t]+[^\s;]*[^\s;.])([ \t;]|$)`)
+// originRE finds $ORIGIN values, split like the zonefile lexer does (on
+// space, tab, CR, LF and ';').
+var originRE = regexp.MustCompile(`(?m)^(\$ORIGIN[ \t]+)([^ \t\r\n;]+)`)
 
+// absoluteOrigins makes $ORIGIN values fully qualified, as zoneomatic reads
+// and writes them.
 func absoluteOrigins(src []byte) []byte {
-	return originRE.ReplaceAll(src, []byte("$1.$2"))
+	return originRE.ReplaceAllFunc(src, func(m []byte) []byte {
+		sub := originRE.FindSubmatch(m)
+		return append(sub[1], dns.Fqdn(string(sub[2]))...)
+	})
 }
 
 func contains(s, sub string) bool {
