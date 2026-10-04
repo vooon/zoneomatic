@@ -1,54 +1,192 @@
-Zone-o-Matic
-============
+# Zone-o-Matic
 
-DNS API server for self-hosted DynDNS / ACME.
+A small self-hosted service that **updates DNS zone files** on request.
 
-I use CoreDNS to serve my zones, unfortunately it does not support nsupdate protocol.
-It does auto-reload modified zone files, so an external service can update them.
+Serve your zones from plain files (e.g. with [CoreDNS][coredns]'s `file`
+plugin, which reloads them on change) and let zoneomatic be the write side:
+routers update their addresses, ACME clients answer `dns-01` challenges,
+cert-manager issues certificates, scripts and tools manage records, all
+through protocols they already speak. The zone files stay yours: hand-written
+comments are kept, and every write is verified before it lands.
 
-Zone-o-matic edits those zone files on request:
+## Features
 
-- **DDNS** — a *no-ip.com* style API, so existing [ddns-scripts][ddns] can
-  update A/AAAA records, optionally with matching PTR records.
-- **ACME `dns-01`** — challenge TXT records for [acme.sh][acmesh] (acme-dns
-  API), [LEGO HTTP-Request][legohttp], and RFC2136 (DNS UPDATE) for
-  cert-manager's built-in `rfc2136` solver or `nsupdate`.
-- **Record management** — a PowerDNS-compatible API subset (e.g. for Proxmox
-  SDN), RFC2136 updates, and a few custom calls.
+| What | Protocol / API | Typical clients |
+|------|----------------|-----------------|
+| Dynamic DNS (A/AAAA, optional PTR) | no-ip style `GET /nic/update` | OpenWRT [ddns-scripts][ddns], routers, any DynDNS client |
+| ACME `dns-01` challenges | acme-dns `POST /acme/update` | [acme.sh][acmesh] |
+| | LEGO HTTP request `POST /present`, `/cleanup` | [lego][legohttp] and lego-based tools |
+| | RFC2136 (DNS UPDATE) with TSIG | cert-manager `rfc2136` solver, `nsupdate` |
+| Record management | PowerDNS API subset (`/api/v1`) | Proxmox SDN and other PowerDNS clients |
+| | RFC2136 full-update listener | `nsupdate`, `knsupdate`, DNS tooling |
+| | `POST /zm/update`, `/zm/update-ptr` | scripts |
+| Observability | OpenTelemetry traces, metrics, logs | any OTLP collector |
 
-Zone files stay readable: comments are kept, and every write is checked before
-it replaces the file (see [Zone files](#zone-files)).
+An OpenWRT package is available in [vooon/my-openwrt-feed][owrtpkg].
 
-You can use OpenWRT package from my feed: [vooon/my-openwrt-feed][owrtpkg].
+## Quick start
 
+A zone file needs a SOA record; its owner is the zone origin:
 
-Quick start
------------
+```dns
+$ORIGIN example.com.
+$TTL 300
+@     IN SOA ns1.example.com. hostmaster.example.com. 1763822925 1H 10M 1W 1D
+@     IN NS  ns1.example.com.
+home  IN A   203.0.113.10   ; updated by the router
+```
 
-Start server:
+Users come from an htpasswd file with bcrypt hashes:
 
 ```bash
+htpasswd -cbB ./htpasswd router 'secret'
 zoneomatic --htpasswd ./htpasswd --zone ./example.com.zone --listen 0.0.0.0:9999
 ```
 
-Update DDNS A record:
+Serve the same file, e.g. with CoreDNS:
 
-```bash
-curl -u "user:password" \
-  "http://127.0.0.1:9999/nic/update?hostname=host.example.com&myip=203.0.113.10"
+```text
+example.com {
+    file /etc/zoneomatic/example.com.zone {
+        reload 10s
+    }
+}
 ```
 
-Update ACME TXT with `acme-dns` compatible endpoint:
+Update a record:
 
 ```bash
-curl -u "user:password" \
-  -H "Content-Type: application/json" \
-  -d '{"subdomain":"host.example.com","txt":"SomeRandomToken"}' \
-  "http://127.0.0.1:9999/acme/update"
+curl -u router:secret "http://127.0.0.1:9999/nic/update?hostname=home.example.com&myip=203.0.113.20"
 ```
 
-Zone files
-----------
+The HTTP API is also described in OpenAPI 3 format at `/swagger`
+(e.g. http://localhost:9999/swagger).
+
+## Integrations
+
+### Routers and DynDNS clients
+
+Point any no-ip compatible client at `/nic/update` (see the
+[reference](#get-nicupdate)). Without `myip`/`myipv6` the client's address is
+used. With `--ddns-manage-ptr` the matching reverse zones are updated too.
+
+### acme.sh
+
+Use the acme-dns plugin (`dns_acmedns`):
+
+- `ACMEDNS_BASE_URL` — e.g. `https://nsapi.example.com/acme`
+- `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD` — a user from the htpasswd file
+- `ACMEDNS_SUBDOMAIN` — the domain you request the certificate for
+
+### lego and lego-based tools
+
+Use the `httpreq` provider in its default mode, with `HTTPREQ_ENDPOINT`
+pointing at zoneomatic and `HTTPREQ_USERNAME`/`HTTPREQ_PASSWORD` from the
+htpasswd file. It uses [`/present` and `/cleanup`](#post-present), which add
+and remove single values, so a certificate for a name and its wildcard works.
+
+### cert-manager
+
+Enable the ACME listener with a TSIG key (see [TSIG keys](#tsig-keys)):
+
+```bash
+zoneomatic \
+  --htpasswd ./htpasswd \
+  --zone ./example.com.zone \
+  --rfc2136-acme-listen 10.0.0.1:15353 \
+  --rfc2136-acme-tsig-file /etc/zoneomatic/tsig.conf \
+  --rfc2136-acme-allow 10.0.0.0/8
+```
+
+cert-manager's `rfc2136` solver runs inside the controller, so no webhook
+deployment is needed. Point it at the ACME listener (tested with cert-manager
+v1.21, see [Development](#development)):
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zoneomatic-tsig
+  namespace: cert-manager
+stringData:
+  tsig-key: YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ=
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-rfc2136
+spec:
+  acme:
+    email: admin@example.com
+    server: https://acme-v02.api.letsencrypt.org/directory
+    privateKeySecretRef:
+      name: letsencrypt-rfc2136-account-key
+    solvers:
+      - dns01:
+          rfc2136:
+            nameserver: 10.0.0.1:15353
+            tsigKeyName: certmanager.example.com
+            tsigAlgorithm: HMACSHA256
+            tsigSecretSecretRef:
+              name: zoneomatic-tsig
+              key: tsig-key
+```
+
+The `tsig-key` value is the base64 secret from the key file (the `secret "..."`
+content, without quotes). The `nameserver` may also be a hostname with port.
+
+cert-manager checks that the challenge record is visible before asking the CA
+to validate it. To run that check against your authoritative server instead of
+public resolvers, set controller flags (Helm values):
+
+```yaml
+extraArgs:
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=10.0.0.2:53
+```
+
+cert-manager processes challenges for the same name one after another, so a
+certificate for `example.com` and `*.example.com` takes two validation rounds.
+
+See [RFC2136 listeners](#rfc2136-listeners) for the key file and the server
+side.
+
+### nsupdate and other DNS UPDATE tools
+
+The full-update listener accepts changes to any record in the zones; give it
+its own key:
+
+```bash
+zoneomatic \
+  --htpasswd ./htpasswd \
+  --zone ./example.com.zone \
+  --rfc2136-update-listen 10.0.0.1:15353 \
+  --rfc2136-update-tsig-file /etc/zoneomatic/tsig.conf \
+  --rfc2136-update-allow 10.0.0.0/8 \
+  --rfc2136-update-max-ttl 300
+```
+
+With `--rfc2136-update-max-ttl 300`, records written through this listener
+inherit the packet TTL, but are capped to 300 seconds when the packet TTL is
+larger (or absent). By default (`0`) the packet TTL is honored as-is.
+
+`nsupdate` example:
+
+```bash
+nsupdate -k /etc/zoneomatic/tsig.conf
+> server 10.0.0.1 15353
+> zone example.com
+> update add host.example.com 60 A 192.0.2.10
+> send
+```
+
+### Proxmox SDN and PowerDNS clients
+
+Configure a PowerDNS DNS plugin with the zoneomatic URL (`http://host:9999`)
+and an API key of `base64(user:password)`; see
+[PowerDNS-compatible API](#powerdns-compatible-api).
+
+## Zone files
 
 Each `--zone` file must contain a SOA record; its owner (resolved against
 `$ORIGIN`) is the zone origin. Several `$ORIGIN` sections in one file are
@@ -94,16 +232,56 @@ is touched. `--acme-ttl` sets the TTL of challenge records (default: the zone
 To preview the layout of an existing file without changing it, use the bundled
 formatter: `dnsfmt --no-inc example.com.zone` (`-r` rewrites in place).
 
+## Reference
 
-Security notes
---------------
+### Configuration
 
-- Authentication uses htpasswd entries with bcrypt hashes.
-- The server does not terminate TLS by itself; run it behind a reverse proxy with HTTPS.
-- If you enable `--accept-proxy`, only expose the service behind a trusted proxy/LB.
+```
+Usage: zoneomatic --zone=FILE,... --htpasswd=FILE [flags]
+
+Updates DNS zone files on request: DDNS, ACME dns-01 (acme-dns, LEGO, RFC2136), PowerDNS-compatible API.
+
+Flags:
+  -h, --help       Show context-sensitive help.
+      --debug      Enable debug logging ($ZM_DEBUG)
+      --version    Print version and exit ($ZM_VERSION)
+
+Zones
+  -z, --zone=FILE,...      Zone files to manage (comma-separated or repeated); each needs a SOA record ($ZM_ZONE)
+      --acme-ttl=0         TTL (seconds) of ACME challenge TXT records; 0 = zone $TTL ($ZM_ACME_TTL)
+      --ddns-manage-ptr    On DDNS updates also update PTR records in matching reverse zones (skipped when none exists) ($ZM_DDNS_MANAGE_PTR)
+
+HTTP API (DDNS, ACME, PowerDNS-compatible)
+      --listen="localhost:9999"     HTTP API listen address ($ZM_LISTEN)
+  -p, --htpasswd=FILE               htpasswd file with API users (bcrypt hashes only) ($ZM_HTPASSWD)
+      --accept-proxy                Expect PROXY protocol headers (only behind a trusted proxy/LB) ($ZM_ACCEPT_PROXY)
+      --proxy-header-timeout=10s    Timeout for reading PROXY protocol headers ($ZM_PROXY_HEADER_TIMEOUT)
+
+RFC2136 ACME listener (only _acme-challenge TXT records, e.g. for cert-manager)
+  --rfc2136-acme-listen=HOST:PORT    UDP and TCP listen address; empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
+  --rfc2136-acme-tsig-file=FILE      TSIG key file in BIND format (tsig-keygen output); required with listen ($ZM_RFC2136_ACME_TSIG_FILE)
+  --rfc2136-acme-allow=CIDR,...      Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
+
+RFC2136 full-update listener (any record in the zones)
+  --rfc2136-update-listen=HOST:PORT    UDP and TCP listen address; empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
+  --rfc2136-update-tsig-file=FILE      TSIG key file in BIND format (tsig-keygen output); required with listen ($ZM_RFC2136_UPDATE_TSIG_FILE)
+  --rfc2136-update-allow=CIDR,...      Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
+  --rfc2136-update-max-ttl=0           Cap the TTL (seconds) of written records; 0 = use the TTL from the update ($ZM_RFC2136_UPDATE_MAX_TTL)
 
 OpenTelemetry
--------------
+  --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
+  --otel-header=KEY=VALUE;...         Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
+  --otel-enable-traces                Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
+  --otel-traces-endpoint=URL          OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
+  --otel-enable-metrics               Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
+  --otel-metrics-endpoint=URL         OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
+  --otel-enable-logs                  Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
+  --otel-logs-endpoint=URL            OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
+  --otel-logs-level=""                Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
+  --otel-service-name="zoneomatic"    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
+```
+
+#### OpenTelemetry
 
 OpenTelemetry supports three explicit signals:
 
@@ -134,52 +312,7 @@ zoneomatic \
   --otel-service-name zoneomatic-prod
 ```
 
-
-Command line options
---------------------
-
-```
-Usage: zoneomatic --htpasswd=FILE --zone=FILE,... [flags]
-
-DNS Zone file updater
-
-Flags:
-  -h, --help                              Show context-sensitive help.
-      --listen="localhost:9999"           Server listen address ($ZM_LISTEN)
-      --accept-proxy                      Accept PROXY protocol ($ZM_ACCEPT_PROXY)
-      --proxy-header-timeout=10s          Timeout for PROXY headers ($ZM_PROXY_HEADER_TIMEOUT)
-  -p, --htpasswd=FILE                     Passwords file (bcrypt only) ($ZM_HTPASSWD)
-  -z, --zone=FILE,...                     Zone files to update ($ZM_ZONE)
-      --acme-ttl=0                        TTL (seconds) for ACME challenge TXT records; 0 = use zone $TTL ($ZM_ACME_TTL)
-      --ddns-manage-ptr                   Update PTR records in matching reverse zones on DDNS update; missing reverse zone is ignored ($ZM_DDNS_MANAGE_PTR)
-      --debug                             Enable debug logging ($ZM_DEBUG)
-      --version                           Print version and exit ($ZM_VERSION)
-      --rfc2136-acme-listen=STRING        Listen address (host:port); empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
-      --rfc2136-acme-tsig-file=FILE       BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_ACME_TSIG_FILE)
-      --rfc2136-acme-allow=CIDR,...       Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
-      --rfc2136-update-listen=STRING      Listen address (host:port); empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
-      --rfc2136-update-tsig-file=FILE     BIND-format TSIG key file (as produced by tsig-keygen); required when listen is set ($ZM_RFC2136_UPDATE_TSIG_FILE)
-      --rfc2136-update-allow=CIDR,...     Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
-      --rfc2136-update-max-ttl=0          Cap the TTL (seconds) of records written through the full-update listener; 0 = honor the update packet TTL ($ZM_RFC2136_UPDATE_MAX_TTL)
-      --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
-      --otel-header=KEY=VALUE;...         Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
-      --otel-enable-traces                Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
-      --otel-traces-endpoint=URL          OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
-      --otel-enable-metrics               Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
-      --otel-metrics-endpoint=URL         OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
-      --otel-enable-logs                  Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
-      --otel-logs-endpoint=URL            OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
-      --otel-logs-level=""                Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
-      --otel-service-name="zoneomatic"    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
-```
-
-> [!NOTE]
-> API description also available in OpenAPI 3 format on `/swagger`,
-> e.g. http://localhost:9999/swagger
-
-
-PowerDNS-Compatible API
------------------------
+### PowerDNS-compatible API
 
 Zone-o-matic exposes a PowerDNS-compatible API subset under `/api/v1`.
 It is intended for clients that only need server discovery plus read/update access to existing zones,
@@ -214,9 +347,9 @@ curl \
   "http://127.0.0.1:9999/api/v1/servers"
 ```
 
+### HTTP endpoints
 
-GET /myip
----------
+#### GET /myip
 
 Return client's IP Address in plain text.
 
@@ -227,9 +360,7 @@ Response status codes:
 | 200 | Success |
 | 500 | Unexpected server error |
 
-
-GET /nic/update
----------------
+#### GET /nic/update
 
 Update A/AAAA records.
 
@@ -269,9 +400,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-POST /acme/update
------------------
+#### POST /acme/update
 
 Update ACME DNS TXT records.
 
@@ -340,9 +469,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-POST /present
--------------
+#### POST /present
 
 Add an ACME challenge TXT value, in LEGO HTTP-request format. Other values of
 the same name are kept (see [ACME challenge records](#acme-challenge-records)).
@@ -375,9 +502,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-POST /cleanup
--------------
+#### POST /cleanup
 
 Remove an ACME challenge TXT value, in LEGO HTTP-request format.
 
@@ -406,9 +531,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-POST /zm/update
----------------
+#### POST /zm/update
 
 Custom Zone-o-matic call.
 Allow to update any existing record(s).
@@ -442,9 +565,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-POST /zm/update-ptr
--------------------
+#### POST /zm/update-ptr
 
 Custom Zone-o-matic call.
 Update PTR records in matching reverse zones for the requested addresses, pointing them to the target host.
@@ -487,9 +608,7 @@ Response status codes:
 | 404 | Zone not found |
 | 500 | Unexpected server error |
 
-
-GET /health
------------
+#### GET /health
 
 Health check endpoint.
 
@@ -499,9 +618,7 @@ Response status codes:
 |------|---------|
 | 200 | Healthy |
 
-
-RFC2136 dynamic updates
------------------------
+### RFC2136 listeners
 
 Zone-o-matic can accept standard RFC2136 (DNS UPDATE) messages, so tools such as
 `nsupdate` and cert-manager's built-in `rfc2136` solver can update records
@@ -527,7 +644,7 @@ On both listeners, every record must be inside the zone named in the update
 (otherwise `NOTZONE`), and that zone must be one of the `--zone` files
 (otherwise `NOTAUTH`).
 
-### TSIG keys
+#### TSIG keys
 
 Keys are read from a BIND-style key file, exactly as produced by `tsig-keygen`
 (part of BIND). Multiple keys may be present in one file.
@@ -546,85 +663,16 @@ key "certmanager.example.com" {
 The algorithm is pinned per key: a client that signs with a different algorithm
 is rejected.
 
-### Example: full update listener
+## Security
 
-```bash
-zoneomatic \
-  --htpasswd ./htpasswd \
-  --zone ./example.com.zone \
-  --rfc2136-update-listen 10.0.0.1:15353 \
-  --rfc2136-update-tsig-file /etc/zoneomatic/tsig.conf \
-  --rfc2136-update-allow 10.0.0.0/8 \
-  --rfc2136-update-max-ttl 300
-```
+- Authentication uses htpasswd entries with bcrypt hashes.
+- The server does not terminate TLS by itself; run it behind a reverse proxy
+  with HTTPS.
+- If you enable `--accept-proxy`, only expose the service behind a trusted
+  proxy/LB.
+- Updates can only touch the configured `--zone` files.
 
-With `--rfc2136-update-max-ttl 300`, records written through this listener
-inherit the packet TTL, but are capped to 300 seconds when the packet TTL is
-larger (or absent). By default (`0`) the packet TTL is honored as-is.
-
-`nsupdate` example:
-
-```bash
-nsupdate -k /etc/zoneomatic/tsig.conf
-> server 10.0.0.1 15353
-> zone example.com
-> update add host.example.com 60 A 192.0.2.10
-> send
-```
-
-### Example: cert-manager (DNS-01 via rfc2136)
-
-cert-manager's `rfc2136` solver runs inside the controller, so no webhook
-deployment is needed. Point it at the ACME listener (tested with cert-manager
-v1.21, see [Development](#development)):
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: zoneomatic-tsig
-  namespace: cert-manager
-stringData:
-  tsig-key: YlZQY3QDIVu4vaD+7ZXhCQJ0NOn35EIvPrR52PP14kQ=
----
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-rfc2136
-spec:
-  acme:
-    email: admin@example.com
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-rfc2136-account-key
-    solvers:
-      - dns01:
-          rfc2136:
-            nameserver: 10.0.0.1:15353
-            tsigKeyName: certmanager.example.com
-            tsigAlgorithm: HMACSHA256
-            tsigSecretSecretRef:
-              name: zoneomatic-tsig
-              key: tsig-key
-```
-
-The `tsig-key` value is the base64 secret from the key file (the `secret "..."`
-content, without quotes). The `nameserver` may also be a hostname with port.
-
-cert-manager checks that the challenge record is visible before asking the CA
-to validate it. To run that check against your authoritative server instead of
-public resolvers, set controller flags (Helm values):
-
-```yaml
-extraArgs:
-  - --dns01-recursive-nameservers-only
-  - --dns01-recursive-nameservers=10.0.0.2:53
-```
-
-cert-manager processes challenges for the same name one after another, so a
-certificate for `example.com` and `*.example.com` takes two validation rounds.
-
-### Security notes
+### RFC2136
 
 RFC2136 with TSIG provides **authentication and integrity, but not
 confidentiality** — the update payload (record names and values, including ACME
@@ -651,9 +699,7 @@ Therefore:
 - Treat the TSIG key file (and any Kubernetes Secret holding it) as sensitive: a
   leaked key allows updates within that key's scope.
 
-
-Development
------------
+## Development
 
 ```bash
 go test ./...                                   # unit tests
@@ -672,6 +718,12 @@ own kubeconfig file (`.k3d-kubeconfig`), the default kubectl context is never
 used. CI runs the same targets.
 
 
+[ddns]: https://openwrt.org/docs/guide-user/services/ddns/client
+[acmesh]: https://openwrt.org/docs/guide-user/services/tls/acmesh
+[legohttp]: https://go-acme.github.io/lego/dns/httpreq/
+[owrtpkg]: https://github.com/vooon/my-openwrt-feed/tree/master/zoneomatic
+
+[coredns]: https://coredns.io/plugins/file/
 [ddns]: https://openwrt.org/docs/guide-user/services/ddns/client
 [acmesh]: https://openwrt.org/docs/guide-user/services/tls/acmesh
 [legohttp]: https://go-acme.github.io/lego/dns/httpreq/
