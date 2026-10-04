@@ -319,7 +319,7 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 				return
 			}
 
-			// NOTE: lego sends which txt value to remove, but i do not support multiple ACME TXTs anyway
+			// Remove only the given value; other challenges for the name stay.
 			err = zctl.UpdateACMEChallenge(ctx, req.Fqdn, "", req.Value)
 			if err != nil {
 				fuego.SendError(w, r, zoneErrorToHTTPError(err))

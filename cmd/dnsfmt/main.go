@@ -12,10 +12,10 @@ import (
 )
 
 type Cli struct {
-	Origin  string           `short:"o" name:"origin" help:"set the origin, otherwise taken from $ORIGIN or the owner name of the SOA record."`
-	Inc     bool             `short:"i" name:"inc" default:"true" negatable:"" help:"increase the serial, default: ${default}"`
-	Replace bool             `short:"r" name:"replace" help:"Replace file with formatted output"`
-	Files   []string         `arg:"" optional:"" placeholder:"FILE" type:"existingfile" help:"Zone file, use stdin if it is '-' or empty"`
+	Origin  string           `short:"o" name:"origin" help:"Zone origin; default: from $ORIGIN or the SOA owner name"`
+	Inc     bool             `short:"i" name:"inc" default:"true" negatable:"" help:"Bump the SOA serial (default: ${default})"`
+	Replace bool             `short:"r" name:"replace" help:"Rewrite the files in place instead of printing"`
+	Files   []string         `arg:"" optional:"" placeholder:"FILE" type:"existingfile" help:"Zone files; stdin when none or '-'"`
 	Version kong.VersionFlag `help:"Print version and exit"`
 }
 
@@ -23,7 +23,7 @@ func main() {
 	var cli Cli
 
 	kctx := kong.Parse(&cli,
-		kong.Description("DNS Zone file formatter"),
+		kong.Description("Formats DNS zone files in the zoneomatic layout, keeping all comments."),
 		kong.DefaultEnvars("DNSFMT"),
 		kong.Vars{"version": buildinfo.String()},
 	)
