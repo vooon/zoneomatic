@@ -52,7 +52,14 @@ func TestCertManagerRFC2136(t *testing.T) {
 }
 
 func issueCertificate(t *testing.T, name string) {
-	since := time.Now().UTC().Format(time.RFC3339)
+	start := time.Now()
+	since := start.UTC().Format(time.RFC3339)
+	t.Cleanup(func() {
+		// Event timeline of the round, to see where the time goes.
+		out, _ := kubectlNoFail("-n", namespace, "get", "events", "--sort-by=.lastTimestamp",
+			"-o", "custom-columns=TIME:.lastTimestamp,KIND:.involvedObject.kind,NAME:.involvedObject.name,REASON:.reason,MESSAGE:.message")
+		t.Logf("events:\n%s", out)
+	})
 
 	kubectlApply(t, fmt.Sprintf(`apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -75,6 +82,7 @@ spec:
 		dumpState(t)
 		t.Fatalf("certificate %s did not become ready: %v\n%s", name, err, out)
 	}
+	t.Logf("certificate ready after %s", time.Since(start).Round(time.Second))
 
 	// Ready is set once the certificate is issued; challenges are cleaned up
 	// afterwards. Wait for that so the CleanUp path is covered as well.
@@ -85,6 +93,7 @@ spec:
 		dumpState(t)
 		t.Fatal("ACME challenges were not cleaned up")
 	}
+	t.Logf("challenges cleaned up after %s", time.Since(start).Round(time.Second))
 
 	zone := kubectl(t, "-n", namespace, "exec", "deployment/zoneomatic", "-c", "zoneomatic", "--", "cat", zonePath)
 	t.Logf("zone file after cleanup:\n%s", zone)
