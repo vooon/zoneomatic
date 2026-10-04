@@ -1,0 +1,9 @@
+# Helm values for jetstack/cert-manager in the k3d test cluster.
+crds:
+  enabled: true
+extraArgs:
+  # Look up the zone and check propagation against the CoreDNS that serves
+  # zoneomatic's zone file instead of the public DNS.
+  - --dns01-recursive-nameservers-only
+  - --dns01-recursive-nameservers=10.43.53.53:53
+  - --dns01-check-retry-period=2s

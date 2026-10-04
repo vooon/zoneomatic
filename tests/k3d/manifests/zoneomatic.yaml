@@ -1,0 +1,107 @@
+# zoneomatic with the ACME-only RFC2136 listener, plus CoreDNS serving the
+# zone file it writes (the authoritative server in a real deployment).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zoneomatic
+  namespace: zoneomatic-e2e
+data:
+  # Test-only credentials.
+  htpasswd: |
+    k3d:$2a$04$JmY9zeynagDyDMEtVNdYvO7a8/bDYIJmKddMfV5RyavXk09oGkolG
+  tsig.conf: |
+    key "certmgr.example.com" {
+      algorithm hmac-sha256;
+      secret "YUC1CxoGAbBCF2oXof/bRu8UGkyp1KViUugjBX6060I=";
+    };
+  # No _acme-challenge entries on purpose: zoneomatic must create them.
+  at.example.com.zone: |
+    $ORIGIN at.example.com.
+    $TTL 60
+    @                IN   SOA   ns1.example.com. hostmaster.example.com. (
+                                1763822925   ; serial
+                                1H           ; refresh
+                                600          ; retry
+                                1W           ; expire
+                                1D           ; minimum
+                                )
+    @                IN   NS    ns1.example.com.
+    www              IN   A     192.0.2.10
+  Corefile: |
+    at.example.com:1053 {
+      file /zones/at.example.com.zone at.example.com {
+        reload 1s
+      }
+      log
+      errors
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoneomatic
+  namespace: zoneomatic-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoneomatic
+  template:
+    metadata:
+      labels:
+        app: zoneomatic
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+      initContainers:
+        - name: seed
+          image: zoneomatic:e2e
+          imagePullPolicy: Never
+          command: ["cp", "/seed/at.example.com.zone", "/zones/at.example.com.zone"]
+          volumeMounts:
+            - { name: config, mountPath: /seed }
+            - { name: zones, mountPath: /zones }
+      containers:
+        - name: zoneomatic
+          image: zoneomatic:e2e
+          imagePullPolicy: Never
+          args:
+            - --listen=0.0.0.0:9999
+            - --htpasswd=/etc/zm/htpasswd
+            - --zone=/zones/at.example.com.zone
+            - --rfc2136-acme-listen=0.0.0.0:5353
+            - --rfc2136-acme-tsig-file=/etc/zm/tsig.conf
+          volumeMounts:
+            - { name: config, mountPath: /etc/zm }
+            - { name: zones, mountPath: /zones }
+        - name: coredns
+          image: docker.io/coredns/coredns:1.12.4
+          args: ["-conf", "/etc/zm/Corefile"]
+          volumeMounts:
+            - { name: config, mountPath: /etc/zm }
+            - { name: zones, mountPath: /zones }
+      volumes:
+        - name: config
+          configMap:
+            name: zoneomatic
+        - name: zones
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoneomatic
+  namespace: zoneomatic-e2e
+spec:
+  selector:
+    app: zoneomatic
+  # Fixed address (k3s service CIDR 10.43.0.0/16): cert-manager's
+  # --dns01-recursive-nameservers and Pebble's -dnsserver take an IP.
+  clusterIP: 10.43.53.53
+  ports:
+    - { name: dns-udp, port: 53, targetPort: 1053, protocol: UDP }
+    - { name: dns-tcp, port: 53, targetPort: 1053, protocol: TCP }
+    - { name: rfc2136-udp, port: 5353, targetPort: 5353, protocol: UDP }
+    - { name: rfc2136-tcp, port: 5353, targetPort: 5353, protocol: TCP }
