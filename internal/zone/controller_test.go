@@ -7,9 +7,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/synctest"
 
+	"github.com/miekg/dns"
 	fcopy "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,7 +160,7 @@ func TestFile_UpdateACMEChallenge_WildcardPlacement(t *testing.T) {
 
 		assertFiles(t, "./testdata/expected-acme-wildcard-present.zone", f.path)
 
-		// Cleanup - replace tokens back to placeholders in place
+		// Cleanup - the first token becomes the placeholder, the second is dropped
 		err = f.UpdateACMEChallenge(ctx, "_acme-challenge", "", token2)
 		assert.NoError(err)
 		err = f.UpdateACMEChallenge(ctx, "_acme-challenge", "", token1)
@@ -510,6 +512,78 @@ func TestFile_RemoveRecordName(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, changed)
 	})
+}
+
+// acmeTXTValues returns the TXT values of a name, in zone file order.
+func acmeTXTValues(t *testing.T, f *File, name string) []string {
+	t.Helper()
+	zf, _, err := f.load()
+	require.NoError(t, err)
+
+	var vals []string
+	for _, ent := range zf.Entries() {
+		if !ent.IsComment && !ent.IsControl && ent.RRType() == dns.TypeTXT && dnsNamesEqual(ent.Domain(), []byte(name)) {
+			vals = append(vals, strings.Join(ent.ValuesStrings(), ""))
+		}
+	}
+	return vals
+}
+
+func TestFile_UpdateACMEChallenge_NewName(t *testing.T) {
+	// Neither s3 nor _acme-challenge.s3 exists in the zone.
+	ctx := context.TODO()
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+	name := "_acme-challenge.s3"
+
+	require.Empty(t, acmeTXTValues(t, f, name))
+
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "tok-apex", EmptyPlaceholder))
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "tok-wild", EmptyPlaceholder))
+	assert.Equal(t, []string{"tok-apex", "tok-wild"}, acmeTXTValues(t, f, name))
+
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "", "tok-apex"))
+	assert.Equal(t, []string{EmptyPlaceholder, "tok-wild"}, acmeTXTValues(t, f, name))
+
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "", "tok-wild"))
+	assert.Equal(t, []string{EmptyPlaceholder}, acmeTXTValues(t, f, name))
+
+	// Other challenge names are untouched.
+	assert.Equal(t, []string{"8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs"}, acmeTXTValues(t, f, "_acme-challenge.zot"))
+
+	// The next certificate run reuses the placeholder.
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "tok-2", EmptyPlaceholder))
+	assert.Equal(t, []string{"tok-2"}, acmeTXTValues(t, f, name))
+}
+
+func TestFile_UpdateACMEChallenge_CleanupCollapsesPlaceholders(t *testing.T) {
+	ctx := context.TODO()
+	// Zone left with duplicate placeholders by the previous cleanup logic.
+	f := newZoneTemp(t, "./testdata/expected-acme-wildcard-present.zone")
+	name := "_acme-challenge"
+	vals := acmeTXTValues(t, f, name)
+	require.Len(t, vals, 2)
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, EmptyPlaceholder, vals[0]))
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, EmptyPlaceholder, vals[1]))
+	require.Equal(t, []string{EmptyPlaceholder, EmptyPlaceholder}, acmeTXTValues(t, f, name))
+
+	// Cleanup (even of a token that is not there) collapses them.
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "", "unknown"))
+	assert.Equal(t, []string{EmptyPlaceholder}, acmeTXTValues(t, f, name))
+
+	// Present then cleanup keeps a single placeholder.
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "tok", EmptyPlaceholder))
+	require.Equal(t, []string{"tok"}, acmeTXTValues(t, f, name))
+	require.NoError(t, f.UpdateACMEChallenge(ctx, name, "", "tok"))
+	assert.Equal(t, []string{EmptyPlaceholder}, acmeTXTValues(t, f, name))
+}
+
+func TestFile_UpdateACMEChallenge_CleanupMissingName(t *testing.T) {
+	ctx := context.TODO()
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+
+	// Cleanup for a name that was never presented leaves just a placeholder.
+	require.NoError(t, f.UpdateACMEChallenge(ctx, "_acme-challenge.s3", "", "never-presented"))
+	assert.Equal(t, []string{EmptyPlaceholder}, acmeTXTValues(t, f, "_acme-challenge.s3"))
 }
 
 func newZoneTemp(t *testing.T, file string) *File {

@@ -456,10 +456,14 @@ address is set and requires a TSIG key file:
 
 Both listeners serve UDP and TCP on the same address.
 
-On the ACME listener, adding a TXT value replaces the placeholder, removing a
-value puts the placeholder back, and deleting the whole TXT RRset or name
-(`nsupdate`'s `update delete _acme-challenge.example.com. [TXT]`) resets the
-name to a single placeholder instead of removing it from the zone file.
+On the ACME listener, adding a TXT value replaces the placeholder (or is
+appended when another challenge for the same name is in flight). Removing a
+value drops it and leaves exactly one placeholder once the last value is gone.
+Deleting the whole TXT RRset or name (`nsupdate`'s
+`update delete _acme-challenge.example.com. [TXT]`) also resets the name to a
+single placeholder instead of removing it from the zone file. Names that are
+not in the zone yet, e.g. `_acme-challenge.s3.example.com.`, are created on
+first use.
 
 ### TSIG keys
 

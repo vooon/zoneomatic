@@ -20,4 +20,3 @@ loop                              IN   A          127.0.0.1
 ; sub-domain challenge
 _acme-challenge.zot               IN   TXT        "8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs"
 _acme-challenge                   IN   TXT        "placeholder"
-                                  IN   TXT        "placeholder"
