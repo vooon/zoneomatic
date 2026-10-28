@@ -523,7 +523,7 @@
 	"paths": {
 		"/acme/update": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func4`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate ACME challenge TXT record",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func4`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nUpdate ACME challenge TXT record",
 				"operationId": "POST_/acme/update",
 				"requestBody": {
 					"content": {
@@ -1477,7 +1477,7 @@
 		},
 		"/cleanup": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func6`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nClean up ACME challenge TXT record using LEGO HTTP-REQ",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func6`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nClean up ACME challenge TXT record using LEGO HTTP-REQ",
 				"operationId": "POST_/cleanup",
 				"requestBody": {
 					"content": {
@@ -1673,7 +1673,7 @@
 		},
 		"/nic/update": {
 			"get": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func3`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate DDNS record",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func3`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nUpdate DDNS record",
 				"operationId": "GET_/nic/update",
 				"parameters": [
 					{
@@ -1774,7 +1774,7 @@
 		},
 		"/present": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func5`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate ACME challenge TXT record using LEGO HTTP-REQ",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func5`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nUpdate ACME challenge TXT record using LEGO HTTP-REQ",
 				"operationId": "POST_/present",
 				"requestBody": {
 					"content": {
@@ -1844,7 +1844,7 @@
 		},
 		"/zm/update": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func7`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nReplace any existing DNS record value",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func7`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nReplace any existing DNS record value",
 				"operationId": "POST_/zm/update",
 				"parameters": [
 					{
@@ -1923,7 +1923,7 @@
 		},
 		"/zm/update-ptr": {
 			"post": {
-				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func8`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.NewBasicAuthMiddleware.func9`\n\n---\n\nUpdate PTR records in matching reverse zones for the requested addresses, pointing them to the target host. The mode controls whether existing PTR records are appended, replaced or fully synced.",
+				"description": "#### Controller: \n\n`github.com/vooon/zoneomatic/internal/server.RegisterEndpoints.func8`\n\n#### Middlewares:\n\n- `github.com/go-fuego/fuego.defaultLogger.middleware`\n- `github.com/vooon/zoneomatic/internal/htpasswd.NewBasicAuthMiddleware.func1`\n\n---\n\nUpdate PTR records in matching reverse zones for the requested addresses, pointing them to the target host. The mode controls whether existing PTR records are appended, replaced or fully synced.",
 				"operationId": "POST_/zm/update-ptr",
 				"parameters": [
 					{
@@ -2000,5 +2000,11 @@
 				"summary": "update ptr records"
 			}
 		}
-	}
+	},
+	"servers": [
+		{
+			"description": "zoneomatic (--listen)",
+			"url": "http://localhost:9999"
+		}
+	]
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vooon/go-masterfile"
 )
 
 const commentsBase = "$ORIGIN c.example.com.\n$TTL 60\n@ IN SOA ns1.example.com. hostmaster.example.com. 1763822925 1H 600 1W 1D\n@ IN NS ns1.example.com.\n"
@@ -146,7 +147,7 @@ host  IN A   192.0.2.2 ; sub host
 
 	out, err := os.ReadFile(p)
 	require.NoError(t, err)
-	got, err := zoneRecords("example.com.", out)
+	got, err := masterfile.Records("example.com.", out)
 	require.NoError(t, err, "%s", out)
 
 	for _, rr := range []string{

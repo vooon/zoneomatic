@@ -33,13 +33,27 @@ func NewFromFile(filename string) (HTPasswd, error) {
 			ret[user] = hash
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
 
 	return ret, nil
 }
 
+// dummyHash is compared against for unknown users, so that a login attempt
+// takes the same time whether or not the user exists.
+var dummyHash = func() []byte {
+	h, err := bcrypt.GenerateFromPassword([]byte("zoneomatic"), bcrypt.DefaultCost)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}()
+
 func (s HTPasswdFile) Authenticate(user, password string) (ok bool, present bool) {
 	hash, present := s[user]
 	if !present {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 		return false, false
 	}
 

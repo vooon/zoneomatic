@@ -14,8 +14,8 @@ comments are kept, and every write is verified before it lands.
 | What | Protocol / API | Typical clients |
 |------|----------------|-----------------|
 | Dynamic DNS (A/AAAA, optional PTR) | no-ip style `GET /nic/update` | OpenWRT [ddns-scripts][ddns], routers, any DynDNS client |
-| ACME `dns-01` challenges | acme-dns `POST /acme/update` | [acme.sh][acmesh] |
-| | LEGO HTTP request `POST /present`, `/cleanup` | [lego][legohttp] and lego-based tools |
+| ACME `dns-01` challenges | LEGO HTTP request `POST /present`, `/cleanup` | [lego][legohttp] and lego-based tools, [acme.sh][acmesh] `dns_acmeproxy` |
+| | acme-dns `POST /acme/update` | [acme.sh][acmesh] `dns_acmedns` |
 | | RFC2136 (DNS UPDATE) with TSIG | cert-manager `rfc2136` solver, `nsupdate` |
 | Record management | PowerDNS API subset (`/api/v1`) | Proxmox SDN and other PowerDNS clients |
 | | RFC2136 full-update listener | `nsupdate`, `knsupdate`, DNS tooling |
@@ -72,7 +72,17 @@ used. With `--ddns-manage-ptr` the matching reverse zones are updated too.
 
 ### acme.sh
 
-Use the acme-dns plugin (`dns_acmedns`):
+Prefer the acmeproxy plugin (`dns_acmeproxy`): it speaks the same protocol as
+LEGO's `httpreq` provider, adding and removing single values through
+[`/present` and `/cleanup`](#post-present), so a certificate for a name and
+its wildcard works:
+
+- `ACMEPROXY_ENDPOINT` — the zoneomatic base URL, e.g. `https://nsapi.example.com`
+  (the plugin appends `/present` and `/cleanup`)
+- `ACMEPROXY_USERNAME`, `ACMEPROXY_PASSWORD` — a user from the htpasswd file
+
+The acme-dns plugin (`dns_acmedns`) works too, but [`/acme/update`](#post-acmeupdate)
+replaces all challenge values of a name at once:
 
 - `ACMEDNS_BASE_URL` — e.g. `https://nsapi.example.com/acme`
 - `ACMEDNS_USERNAME`, `ACMEDNS_PASSWORD` — a user from the htpasswd file
@@ -201,8 +211,10 @@ On every change zoneomatic rewrites the whole file:
   (always increasing, even for several changes within a second), `YYYYMMDDnn`
   serials are incremented. The serial line gets a date comment.
 - The file is **re-laid out** in a compact, aligned format: owner names
-  relative to `$ORIGIN`, values as written, blank lines kept. `$ORIGIN` is
-  always written fully qualified.
+  relative to `$ORIGIN` (written out again after a comment or blank line),
+  values as written, blank lines kept. `$ORIGIN` is always written fully
+  qualified. A record TTL equal to the `$TTL` in effect is redundant and
+  dropped; other explicit TTLs are kept in their own column.
 - The result is **verified before it replaces the file**: it must contain
   exactly the intended records (checked with an independent parser,
   miekg/dns) and all comments. Otherwise the update fails and the file is left
@@ -227,10 +239,13 @@ from the file; when no challenge is active the name holds a single
 Challenge values must be ACME tokens (base64url: `A-Z a-z 0-9 - _`, as
 RFC 8555 `dns-01` values are); anything else is rejected before the zone file
 is touched. `--acme-ttl` sets the TTL of challenge records (default: the zone
-`$TTL`).
+`$TTL`; a value equal to it is not written).
 
-To preview the layout of an existing file without changing it, use the bundled
-formatter: `dnsfmt --no-inc example.com.zone` (`-r` rewrites in place).
+The bundled `dnsfmt` tool applies the same layout from the command line:
+`dnsfmt --no-inc example.com.zone` previews it, `-r` rewrites the file in
+place. Both use the formatter of
+[go-masterfile](https://github.com/vooon/go-masterfile), so a file written by
+zoneomatic is already in `dnsfmt` form (given the same version of both).
 
 ## Reference
 
@@ -239,7 +254,8 @@ formatter: `dnsfmt --no-inc example.com.zone` (`-r` rewrites in place).
 ```
 Usage: zoneomatic --zone=FILE,... --htpasswd=FILE [flags]
 
-Updates DNS zone files on request: DDNS, ACME dns-01 (acme-dns, LEGO, RFC2136), PowerDNS-compatible API.
+Updates DNS zone files on request: DDNS, ACME dns-01 (acme-dns, LEGO, RFC2136),
+PowerDNS-compatible API.
 
 Flags:
   -h, --help       Show context-sensitive help.
@@ -247,38 +263,90 @@ Flags:
       --version    Print version and exit ($ZM_VERSION)
 
 Zones
-  -z, --zone=FILE,...      Zone files to manage (comma-separated or repeated); each needs a SOA record ($ZM_ZONE)
-      --acme-ttl=0         TTL (seconds) of ACME challenge TXT records; 0 = zone $TTL ($ZM_ACME_TTL)
-      --ddns-manage-ptr    On DDNS updates also update PTR records in matching reverse zones (skipped when none exists) ($ZM_DDNS_MANAGE_PTR)
+  -z, --zone=FILE,...      Zone files to manage (comma-separated or repeated);
+                           each needs a SOA record ($ZM_ZONE)
+      --acme-ttl=0         TTL (seconds) of ACME challenge TXT records; 0 = zone
+                           $TTL ($ZM_ACME_TTL)
+      --ddns-manage-ptr    On DDNS updates also update PTR records in
+                           matching reverse zones (skipped when none exists)
+                           ($ZM_DDNS_MANAGE_PTR)
 
 HTTP API (DDNS, ACME, PowerDNS-compatible)
-      --listen="localhost:9999"     HTTP API listen address ($ZM_LISTEN)
-  -p, --htpasswd=FILE               htpasswd file with API users (bcrypt hashes only) ($ZM_HTPASSWD)
-      --accept-proxy                Expect PROXY protocol headers (only behind a trusted proxy/LB) ($ZM_ACCEPT_PROXY)
-      --proxy-header-timeout=10s    Timeout for reading PROXY protocol headers ($ZM_PROXY_HEADER_TIMEOUT)
+      --listen="localhost:9999"    HTTP API listen address ($ZM_LISTEN)
+  -p, --htpasswd=FILE              htpasswd file with API users (bcrypt hashes
+                                   only) ($ZM_HTPASSWD)
+      --accept-proxy               Expect PROXY protocol headers from
+                                   the proxy/LB in --proxy-trusted;
+                                   connections from other addresses are dropped
+                                   ($ZM_ACCEPT_PROXY)
+      --proxy-trusted=CIDR,...     Addresses allowed to send PROXY protocol
+                                   headers (comma-separated or repeated)
+                                   ($ZM_PROXY_TRUSTED)
+      --proxy-header-timeout=10s
+                                   Timeout for reading PROXY protocol headers
+                                   ($ZM_PROXY_HEADER_TIMEOUT)
+      --max-body-size=BYTES        Largest accepted request body; 0 = unlimited
+                                   ($ZM_MAX_BODY_SIZE)
+      --rate-limit=N               Requests per second allowed per client
+                                   address; 0 = unlimited ($ZM_RATE_LIMIT)
+      --rate-burst=N               Requests a client may send at once before
+                                   --rate-limit applies ($ZM_RATE_BURST)
 
 RFC2136 ACME listener (only _acme-challenge TXT records, e.g. for cert-manager)
-  --rfc2136-acme-listen=HOST:PORT    UDP and TCP listen address; empty disables the listener ($ZM_RFC2136_ACME_LISTEN)
-  --rfc2136-acme-tsig-file=FILE      TSIG key file in BIND format (tsig-keygen output); required with listen ($ZM_RFC2136_ACME_TSIG_FILE)
-  --rfc2136-acme-allow=CIDR,...      Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_ACME_ALLOW)
+  --rfc2136-acme-listen=HOST:PORT
+                                   UDP and TCP listen address; empty disables
+                                   the listener ($ZM_RFC2136_ACME_LISTEN)
+  --rfc2136-acme-tsig-file=FILE    TSIG key file in BIND format (tsig-keygen
+                                   output); required with listen
+                                   ($ZM_RFC2136_ACME_TSIG_FILE)
+  --rfc2136-acme-allow=CIDR,...    Allowed client CIDRs (comma-separated
+                                   or repeated); empty allows all
+                                   ($ZM_RFC2136_ACME_ALLOW)
 
 RFC2136 full-update listener (any record in the zones)
-  --rfc2136-update-listen=HOST:PORT    UDP and TCP listen address; empty disables the listener ($ZM_RFC2136_UPDATE_LISTEN)
-  --rfc2136-update-tsig-file=FILE      TSIG key file in BIND format (tsig-keygen output); required with listen ($ZM_RFC2136_UPDATE_TSIG_FILE)
-  --rfc2136-update-allow=CIDR,...      Allowed client CIDRs (comma-separated or repeated); empty allows all ($ZM_RFC2136_UPDATE_ALLOW)
-  --rfc2136-update-max-ttl=0           Cap the TTL (seconds) of written records; 0 = use the TTL from the update ($ZM_RFC2136_UPDATE_MAX_TTL)
+  --rfc2136-update-listen=HOST:PORT
+                                UDP and TCP listen address; empty disables the
+                                listener ($ZM_RFC2136_UPDATE_LISTEN)
+  --rfc2136-update-tsig-file=FILE
+                                TSIG key file in BIND format (tsig-keygen
+                                output); required with listen
+                                ($ZM_RFC2136_UPDATE_TSIG_FILE)
+  --rfc2136-update-allow=CIDR,...
+                                Allowed client CIDRs (comma-separated
+                                or repeated); empty allows all
+                                ($ZM_RFC2136_UPDATE_ALLOW)
+  --rfc2136-update-max-ttl=0    Cap the TTL (seconds) of written records;
+                                0 = use the TTL from the update
+                                ($ZM_RFC2136_UPDATE_MAX_TTL)
 
 OpenTelemetry
-  --otel-endpoint=URL                 Shared OTLP/HTTP endpoint URL for enabled signals (typically collector URL) ($ZM_OTEL_ENDPOINT)
-  --otel-header=KEY=VALUE;...         Additional HTTP headers for all OTLP exporters, repeatable (e.g. Authorization=Bearer token) ($ZM_OTEL_HEADER)
-  --otel-enable-traces                Enable OpenTelemetry traces signal ($ZM_OTEL_ENABLE_TRACES)
-  --otel-traces-endpoint=URL          OTLP/HTTP traces endpoint URL (e.g. http://127.0.0.1:4318/v1/traces) ($ZM_OTEL_TRACES_ENDPOINT)
-  --otel-enable-metrics               Enable OpenTelemetry metrics signal ($ZM_OTEL_ENABLE_METRICS)
-  --otel-metrics-endpoint=URL         OTLP/HTTP metrics endpoint URL (e.g. http://127.0.0.1:4318/v1/metrics) ($ZM_OTEL_METRICS_ENDPOINT)
-  --otel-enable-logs                  Enable OpenTelemetry logs signal ($ZM_OTEL_ENABLE_LOGS)
-  --otel-logs-endpoint=URL            OTLP/HTTP logs endpoint URL (e.g. http://127.0.0.1:4318/v1/logs) ($ZM_OTEL_LOGS_ENDPOINT)
-  --otel-logs-level=""                Minimum log level forwarded to OTLP (debug|info|warn|error); defaults to same as console ($ZM_OTEL_LOGS_LEVEL)
-  --otel-service-name="zoneomatic"    OpenTelemetry service name ($ZM_OTEL_SERVICE_NAME)
+  --otel-endpoint=URL            Shared OTLP/HTTP endpoint URL for
+                                 enabled signals (typically collector URL)
+                                 ($ZM_OTEL_ENDPOINT)
+  --otel-header=KEY=VALUE;...    Additional HTTP headers for all OTLP exporters,
+                                 repeatable (e.g. Authorization=Bearer token)
+                                 ($ZM_OTEL_HEADER)
+  --otel-enable-traces           Enable OpenTelemetry traces signal
+                                 ($ZM_OTEL_ENABLE_TRACES)
+  --otel-traces-endpoint=URL     OTLP/HTTP traces endpoint URL (e.g.
+                                 http://127.0.0.1:4318/v1/traces)
+                                 ($ZM_OTEL_TRACES_ENDPOINT)
+  --otel-enable-metrics          Enable OpenTelemetry metrics signal
+                                 ($ZM_OTEL_ENABLE_METRICS)
+  --otel-metrics-endpoint=URL    OTLP/HTTP metrics endpoint URL (e.g.
+                                 http://127.0.0.1:4318/v1/metrics)
+                                 ($ZM_OTEL_METRICS_ENDPOINT)
+  --otel-enable-logs             Enable OpenTelemetry logs signal
+                                 ($ZM_OTEL_ENABLE_LOGS)
+  --otel-logs-endpoint=URL       OTLP/HTTP logs endpoint URL (e.g.
+                                 http://127.0.0.1:4318/v1/logs)
+                                 ($ZM_OTEL_LOGS_ENDPOINT)
+  --otel-logs-level=""           Minimum log level forwarded to OTLP
+                                 (debug|info|warn|error); defaults to same as
+                                 console ($ZM_OTEL_LOGS_LEVEL)
+  --otel-service-name="zoneomatic"
+                                 OpenTelemetry service name
+                                 ($ZM_OTEL_SERVICE_NAME)
 ```
 
 #### OpenTelemetry
@@ -487,7 +555,10 @@ JSON Object fields:
 | fqdn | Yes | Record name, with or without `_acme-challenge.` | `_acme-challenge.foo.example.com.` |
 | value | Yes | Validation token (base64url) for the TXT record | `SomeRandomToken` |
 
-See also: https://go-acme.github.io/lego/dns/httpreq/
+See also: https://go-acme.github.io/lego/dns/httpreq/ and acme.sh
+[`dns_acmeproxy`](https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_acmeproxy.sh)
+(same requests; it expects the response to echo `fqdn` and `value`, which
+zoneomatic does).
 
 > [!NOTE]
 > Only HTTPREQ_MODE=default is supported
@@ -519,7 +590,10 @@ JSON Object fields:
 | fqdn | Yes | Record name, with or without `_acme-challenge.` | `_acme-challenge.foo.example.com.` |
 | value | No | Token to remove; other values of the name are kept. Empty resets the name to the placeholder. | `SomeRandomToken` |
 
-See also: https://go-acme.github.io/lego/dns/httpreq/
+See also: https://go-acme.github.io/lego/dns/httpreq/ and acme.sh
+[`dns_acmeproxy`](https://github.com/acmesh-official/acme.sh/blob/master/dnsapi/dns_acmeproxy.sh)
+(same requests; it expects the response to echo `fqdn` and `value`, which
+zoneomatic does).
 
 Response status codes:
 
@@ -665,12 +739,26 @@ is rejected.
 
 ## Security
 
-- Authentication uses htpasswd entries with bcrypt hashes.
+- Authentication uses htpasswd entries with bcrypt hashes. An unknown user
+  costs the same time as a wrong password.
+- **There is no per-user authorization.** Every user in the htpasswd file may
+  change every record of every `--zone` file, through every endpoint. One
+  leaked credential means full write access to all managed zones; use a
+  separate deployment per trust domain if that matters.
+- Updates can only touch the configured `--zone` files, and only values that
+  form exactly one record are accepted: a value cannot carry extra records,
+  directives or comments into a zone.
 - The server does not terminate TLS by itself; run it behind a reverse proxy
   with HTTPS.
-- If you enable `--accept-proxy`, only expose the service behind a trusted
-  proxy/LB.
-- Updates can only touch the configured `--zone` files.
+- With `--accept-proxy`, only the addresses in `--proxy-trusted` (default:
+  localhost) may open a connection, and they must send a PROXY protocol
+  header. Connections from anyone else are dropped, so a client cannot forge
+  its address. Set `--proxy-trusted` to the proxy's address when it is not on
+  the same host.
+- Request bodies are limited to `--max-body-size` (default 4 MiB). An optional
+  per-client rate limit (`--rate-limit` requests per second, `--rate-burst`)
+  answers 429 to clients over it; it is off by default. Both apply to the
+  HTTP API only.
 
 ### RFC2136
 
@@ -708,8 +796,15 @@ go test ./internal/zone -update                 # rewrite zone golden files afte
 go test ./internal/zone -run '^$' -fuzz FuzzZoneSave -fuzztime 5m
 ```
 
-`pkg/dnsfmt` is a separate Go module: test it through a workspace
-(`go work init . ./pkg/dnsfmt && go test ./pkg/dnsfmt/...`).
+Zone file handling lives in the separate library
+[go-masterfile](https://github.com/vooon/go-masterfile): the parser, owner
+name resolution, record construction, the formatter (`dnsfmt` is a thin CLI
+over it), the miekg/dns based verification, and the editing operations
+(replace, add/remove, collapse, placement of new records). `internal/zone`
+maps zoneomatic's requests (DDNS, ACME, PowerDNS API, RFC 2136, PTR) onto
+those operations, locks and writes the files, and routes names to zones.
+Layout changes and new operations go to that library; its tests hold the
+golden files for the operations, zoneomatic's goldens prove the wiring.
 
 `make k3d` issues real certificates with cert-manager's `rfc2136` solver
 against zoneomatic, Pebble and CoreDNS in a throwaway k3d cluster (needs

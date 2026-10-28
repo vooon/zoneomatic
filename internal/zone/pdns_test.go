@@ -2,6 +2,7 @@ package zone
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,13 +44,30 @@ func TestFile_ReplaceRRSet(t *testing.T) {
 func TestFile_ReplaceRRSet_CaseInsensitiveName(t *testing.T) {
 	f := newZoneTemp(t, "./testdata/at.example.com.zone")
 
-	changed, err := f.ReplaceRRSet(context.Background(), "LOOP.at.example.com.", "A", 60, []string{"127.0.0.1"})
+	changed, err := f.ReplaceRRSet(context.Background(), "LOOP.at.example.com.", "A", 120, []string{"127.0.0.1"})
 	require.NoError(t, err)
 	assert.True(t, changed)
 
 	snapshot, err := f.Snapshot(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, countRRSet(snapshot.RRsets, "loop.at.example.com.", "A"))
+	assert.Equal(t, 120, findRRSet(t, snapshot.RRsets, "loop.at.example.com.", "A").TTL)
+}
+
+func TestFile_ReplaceRRSet_SameEffectiveTTLIsNoop(t *testing.T) {
+	// The zone has $TTL 60: the same record with an explicit TTL of 60 means
+	// the same thing, so nothing is written (and no serial is bumped).
+	f := newZoneTemp(t, "./testdata/at.example.com.zone")
+	before, err := os.ReadFile(f.path)
+	require.NoError(t, err)
+
+	changed, err := f.ReplaceRRSet(context.Background(), "loop.at.example.com.", "A", 60, []string{"127.0.0.1"})
+	require.NoError(t, err)
+	assert.False(t, changed)
+
+	after, err := os.ReadFile(f.path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
 }
 
 func TestFile_DeleteRRSet(t *testing.T) {

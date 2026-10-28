@@ -72,16 +72,33 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 	}
 
 	if cli.AcceptProxy {
-		pl := &proxyproto.Listener{
+		// Only the configured proxies may speak PROXY protocol, and they
+		// must: a connection from anyone else is dropped, so nobody can
+		// forge a client address by sending a header of their own.
+		policy, err := proxyproto.TrustProxyHeaderFromRanges(prefixStrings(cli.ProxyTrusted))
+		if err != nil {
+			listener.Close() // nolint:errcheck
+			return nil, nil, fmt.Errorf("--proxy-trusted: %w", err)
+		}
+		listener = &proxyproto.Listener{
 			Listener:          listener,
+			ConnPolicy:        policy,
 			ReadHeaderTimeout: cli.ProxyHeaderTimeout,
 		}
-		listener = pl
+	}
+
+	middlewares := []func(http.Handler) http.Handler{otelHTTPMiddleware()}
+	if cli.MaxBodySize > 0 {
+		middlewares = append(middlewares, maxBodyMiddleware(cli.MaxBodySize))
+	}
+	if cli.RateLimit > 0 {
+		middlewares = append(middlewares, newClientLimiter(cli.RateLimit, cli.RateBurst).middleware)
 	}
 
 	srv := fuego.NewServer(
 		fuego.WithListener(listener),
-		fuego.WithGlobalMiddlewares(otelHTTPMiddleware()),
+		fuego.WithGlobalMiddlewares(middlewares...),
+		fuego.WithMaxBodySize(cli.MaxBodySize),
 		fuego.WithEngineOptions(
 			fuego.WithOpenAPIConfig(fuego.OpenAPIConfig{
 				JSONFilePath:     "doc/openapi.json",
@@ -89,6 +106,9 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 				SpecURL:          "/swagger/openapi.json",
 				SwaggerURL:       "/swagger",
 				UIHandler:        fuego.DefaultOpenAPIHandler,
+				// The server entry is the configured address, not the bound
+				// one, so the written spec does not change with every run.
+				DisableDefaultServer: true,
 				Info: &openapi3.Info{
 					Title:       "Zoneomatic API",
 					Description: "HTTP API for zoneomatic DNS updates and PowerDNS-compatible zone management.",
@@ -127,6 +147,11 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 			},
 		),
 	)
+
+	srv.OpenAPI.Description().Servers = append(srv.OpenAPI.Description().Servers, &openapi3.Server{
+		URL:         "http://" + cli.Listen,
+		Description: "zoneomatic (--listen)",
+	})
 
 	return srv, listener, nil
 }
@@ -426,6 +451,14 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 
 }
 
+func prefixStrings(prefixes []netip.Prefix) []string {
+	ret := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		ret = append(ret, p.String())
+	}
+	return ret
+}
+
 func badRequestError(detail string) *fuego.HTTPError {
 	return &fuego.HTTPError{
 		Title:  "bad request",
@@ -435,7 +468,7 @@ func badRequestError(detail string) *fuego.HTTPError {
 }
 
 func zoneErrorToHTTPError(err error) error {
-	if errors.Is(err, zone.ErrInvalidACMEToken) {
+	if errors.Is(err, zone.ErrInvalidACMEToken) || errors.Is(err, zone.ErrInvalidRecord) {
 		return &fuego.HTTPError{
 			Title:  "bad request",
 			Detail: err.Error(),

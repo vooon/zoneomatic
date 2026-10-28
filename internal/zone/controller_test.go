@@ -16,6 +16,7 @@ import (
 	fcopy "github.com/otiai10/copy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vooon/go-masterfile"
 	"github.com/vooon/zoneomatic/pkg/fileutil"
 )
 
@@ -518,14 +519,12 @@ func TestFile_RemoveRecordName(t *testing.T) {
 // acmeTXTValues returns the TXT values of a name, in zone file order.
 func acmeTXTValues(t *testing.T, f *File, name string) []string {
 	t.Helper()
-	zf, _, err := f.load()
+	z, err := f.load()
 	require.NoError(t, err)
 
 	var vals []string
-	for _, ent := range zf.Entries() {
-		if !ent.IsComment && !ent.IsControl && ent.RRType() == dns.TypeTXT && dnsNamesEqual(ent.Domain(), []byte(name)) {
-			vals = append(vals, strings.Join(ent.ValuesStrings(), ""))
-		}
+	for _, ent := range z.Select(masterfile.Selector{Owner: name, Types: []uint16{dns.TypeTXT}}) {
+		vals = append(vals, ent.Content())
 	}
 	return vals
 }
@@ -645,12 +644,6 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestDomainMatchesOrigin(t *testing.T) {
-	assert.True(t, domainMatchesOrigin("example.com.", "example.com."))
-	assert.True(t, domainMatchesOrigin("a.example.com.", "example.com."))
-	assert.False(t, domainMatchesOrigin("badexample.com.", "example.com."))
-}
-
 func TestFindZoneFile_PrefersLongestOrigin(t *testing.T) {
 	ctrl := &DomainCtrl{
 		files: []*File{
@@ -706,10 +699,4 @@ func TestDomainCtrl_UpdateACMEChallenge_RejectsInvalidToken(t *testing.T) {
 	after, err := os.ReadFile(f.path)
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after))
-}
-
-func TestDNSNamesEqual_NonASCII(t *testing.T) {
-	assert.True(t, dnsNamesEqual([]byte("WWW.example.com."), []byte("www.Example.com.")))
-	assert.False(t, dnsNamesEqual([]byte("\xcd.example.com."), []byte("\xf0.example.com.")))
-	assert.False(t, domainMatchesOrigin("\xcd.", "\xf0."))
 }

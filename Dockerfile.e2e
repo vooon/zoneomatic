@@ -1,7 +1,6 @@
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
-COPY pkg/dnsfmt/go.mod pkg/dnsfmt/go.sum pkg/dnsfmt/
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o zoneomatic ./cmd/zoneomatic

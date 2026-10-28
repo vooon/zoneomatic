@@ -26,10 +26,14 @@ type Cli struct {
 	AcmeTTL       int      `name:"acme-ttl" default:"0" group:"zones" help:"TTL (seconds) of ACME challenge TXT records; 0 = zone $TTL"`
 	DDNSManagePTR bool     `name:"ddns-manage-ptr" group:"zones" help:"On DDNS updates also update PTR records in matching reverse zones (skipped when none exists)"`
 
-	Listen             string        `name:"listen" default:"localhost:9999" group:"http" help:"HTTP API listen address"`
-	HTPasswdFile       string        `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" group:"http" help:"htpasswd file with API users (bcrypt hashes only)"`
-	AcceptProxy        bool          `name:"accept-proxy" group:"http" help:"Expect PROXY protocol headers (only behind a trusted proxy/LB)"`
-	ProxyHeaderTimeout time.Duration `name:"proxy-header-timeout" default:"10s" group:"http" help:"Timeout for reading PROXY protocol headers"`
+	Listen             string         `name:"listen" default:"localhost:9999" group:"http" help:"HTTP API listen address"`
+	HTPasswdFile       string         `short:"p" name:"htpasswd" required:"" type:"existingfile" placeholder:"FILE" group:"http" help:"htpasswd file with API users (bcrypt hashes only)"`
+	AcceptProxy        bool           `name:"accept-proxy" group:"http" help:"Expect PROXY protocol headers from the proxy/LB in --proxy-trusted; connections from other addresses are dropped"`
+	ProxyTrusted       []netip.Prefix `name:"proxy-trusted" default:"127.0.0.1/32,::1/128" sep:"," placeholder:"CIDR" group:"http" help:"Addresses allowed to send PROXY protocol headers (comma-separated or repeated)"`
+	ProxyHeaderTimeout time.Duration  `name:"proxy-header-timeout" default:"10s" group:"http" help:"Timeout for reading PROXY protocol headers"`
+	MaxBodySize        int64          `name:"max-body-size" default:"4194304" placeholder:"BYTES" group:"http" help:"Largest accepted request body; 0 = unlimited"`
+	RateLimit          float64        `name:"rate-limit" default:"0" placeholder:"N" group:"http" help:"Requests per second allowed per client address; 0 = unlimited"`
+	RateBurst          int            `name:"rate-burst" default:"20" placeholder:"N" group:"http" help:"Requests a client may send at once before --rate-limit applies"`
 
 	RFC2136ACME RFC2136ListenerConfig `embed:"" prefix:"rfc2136-acme-" envprefix:"ZM_RFC2136_ACME_" group:"rfc2136-acme"`
 	RFC2136Upd  RFC2136ListenerConfig `embed:"" prefix:"rfc2136-update-" envprefix:"ZM_RFC2136_UPDATE_" group:"rfc2136-update"`

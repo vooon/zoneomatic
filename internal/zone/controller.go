@@ -1,12 +1,11 @@
 package zone
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
+	"math"
 	"net/netip"
 	"os"
 	"path"
@@ -15,22 +14,30 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
-	"github.com/vooon/zoneomatic/pkg/dnsfmt"
+	"github.com/vooon/go-masterfile"
 	"github.com/vooon/zoneomatic/pkg/fileutil"
-	"github.com/vooon/zoneomatic/pkg/zonefile"
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// ErrSoaNotFound emited if zone file does not have SOA record, which is mandatory
 var (
-	ErrSoaNotFound    = errors.New("SOA not found")
+	// ErrSoaNotFound is returned for a zone file without an SOA record, which
+	// is mandatory.
+	ErrSoaNotFound = errors.New("SOA not found")
+	// ErrRecordNotFound is returned when an update needs an existing record
+	// and there is none.
 	ErrRecordNotFound = errors.New("record not found")
-	ErrNoMatchers     = errors.New("no record matchers provided")
-	ErrOriginChanged  = errors.New("zone origin changed")
-	ErrZoneNotFound   = errors.New("zone not found")
+	// ErrNoAddresses is returned for a DDNS or PTR update without addresses.
+	ErrNoAddresses = errors.New("no addresses provided")
+	// ErrOriginChanged is returned when a zone file's SOA names another zone
+	// than it did when it was first loaded.
+	ErrOriginChanged = errors.New("zone origin changed")
+	ErrZoneNotFound  = errors.New("zone not found")
 	// ErrInvalidACMEToken is returned for a challenge value that is not a
 	// base64url ACME key authorization digest.
 	ErrInvalidACMEToken = errors.New("invalid ACME challenge token")
+	// ErrInvalidRecord is returned for a record name, TTL or value that does
+	// not form exactly one record.
+	ErrInvalidRecord = masterfile.ErrInvalidRecord
 )
 
 // EmptyPlaceholder will be used instead of empty ACME TXT because we cannot really set ""
@@ -110,14 +117,6 @@ const (
 	PTRUpdateReplaceAll PTRUpdateMode = "replace-all"
 )
 
-type Matcher struct {
-	Domain []byte
-	RRType uint16
-	Values [][]byte
-}
-
-type Matchers []Matcher
-
 // Option configures the zone controller.
 type Option func(*DomainCtrl)
 
@@ -157,7 +156,6 @@ func New(zonefiles ...string) (Controller, error) {
 }
 
 func NewWithOptions(opts []Option, zonefiles ...string) (Controller, error) {
-
 	ret := make([]*File, 0, len(zonefiles))
 	for _, fl := range zonefiles {
 		fileName := path.Base(fl)
@@ -166,8 +164,7 @@ func NewWithOptions(opts []Option, zonefiles ...string) (Controller, error) {
 			lg:   slog.Default().With("zone_file", fileName),
 		}
 
-		_, _, err := f.load()
-		if err != nil {
+		if _, err := f.load(); err != nil {
 			return nil, fmt.Errorf("failed to load zone: %s: %w", fileName, err)
 		}
 
@@ -198,10 +195,7 @@ func (s *DomainCtrl) UpdateDDNSAddress(ctx context.Context, domain string, addrs
 
 	lg := slog.Default().With("domain", domain)
 
-	domainDot := domain
-	if !strings.HasSuffix(domainDot, ".") {
-		domainDot += "."
-	}
+	domainDot := normalizeZoneName(domain)
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl != nil {
@@ -239,10 +233,7 @@ func (s *DomainCtrl) UpdateACMEChallenge(ctx context.Context, domain string, new
 		return err
 	}
 
-	domainDot := domain
-	if !strings.HasSuffix(domainDot, ".") {
-		domainDot += "."
-	}
+	domainDot := normalizeZoneName(domain)
 
 	if !strings.HasPrefix(domainDot, "_acme-challenge.") {
 		domainDot = "_acme-challenge." + domainDot
@@ -274,10 +265,7 @@ func (s *DomainCtrl) ZMUpdateRecord(ctx context.Context, domain string, typ stri
 
 	lg := slog.Default().With("domain", domain)
 
-	domainDot := domain
-	if !strings.HasSuffix(domainDot, ".") {
-		domainDot += "."
-	}
+	domainDot := normalizeZoneName(domain)
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl != nil {
@@ -306,10 +294,7 @@ func (s *DomainCtrl) ApplyRecordUpdate(ctx context.Context, domain string, typ s
 
 	lg := slog.Default().With("domain", domain)
 
-	domainDot := domain
-	if !strings.HasSuffix(domainDot, ".") {
-		domainDot += "."
-	}
+	domainDot := normalizeZoneName(domain)
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl == nil {
@@ -334,10 +319,7 @@ func (s *DomainCtrl) RemoveRecordName(ctx context.Context, domain string) (chang
 
 	lg := slog.Default().With("domain", domain)
 
-	domainDot := domain
-	if !strings.HasSuffix(domainDot, ".") {
-		domainDot += "."
-	}
+	domainDot := normalizeZoneName(domain)
 
 	fl := s.findZoneFile(ctx, lg, domainDot)
 	if fl == nil {
@@ -349,181 +331,68 @@ func (s *DomainCtrl) RemoveRecordName(ctx context.Context, domain string) (chang
 	return fl.RemoveRecordName(ctx, domainDot)
 }
 
+// findZoneFile returns the managed zone whose origin contains domainDot and
+// is the longest such origin, or nil.
 func (s *DomainCtrl) findZoneFile(ctx context.Context, lg *slog.Logger, domainDot string) *File {
-	var best *File
-	bestLen := -1
+	apexes := make([]string, 0, len(s.files))
 	for _, fl := range s.files {
 		lg.DebugContext(ctx, "Check file", "file_origin", fl.origin)
-		if !domainMatchesOrigin(domainDot, fl.origin) {
-			continue
-		}
-		if l := len(fl.origin); l > bestLen {
-			best = fl
-			bestLen = l
-		}
+		apexes = append(apexes, fl.origin)
 	}
-	return best
-}
-
-// lowerASCII lowercases ASCII letters only, as DNS name comparison does
-// (RFC 4343); strings.ToLower would map all invalid UTF-8 to U+FFFD.
-// It works on bytes: strings.Map would also replace invalid UTF-8.
-func lowerASCII(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if 'A' <= c && c <= 'Z' {
-			b[i] = c + 'a' - 'A'
+	apex, ok := masterfile.LongestZone(domainDot, apexes)
+	if !ok {
+		return nil
+	}
+	for _, fl := range s.files {
+		if fl.origin == apex {
+			return fl
 		}
 	}
-	return string(b)
+	return nil
 }
 
-func domainMatchesOrigin(domain, origin string) bool {
-	domain = lowerASCII(normalizeZoneName(domain))
-	origin = lowerASCII(normalizeZoneName(origin))
-
-	if domain == origin {
-		return true
-	}
-
-	originNoDot := strings.TrimSuffix(origin, ".")
-	if originNoDot == "" {
-		return false
-	}
-
-	return strings.HasSuffix(domain, "."+originNoDot+".")
-}
-
-func (m Matcher) Match(e zonefile.Entry) bool {
-	if m.Domain != nil && !dnsNamesEqual(e.Domain(), m.Domain) {
-		return false
-	}
-
-	if m.RRType > 0 && m.RRType != e.RRType() {
-		return false
-	}
-
-	if m.Values != nil && !slices.EqualFunc(e.Values(), m.Values, bytes.Equal) {
-		return false
-	}
-
-	return true
-}
-
-func dnsNamesEqual(a, b []byte) bool {
-	return dnsfmt.NameEqual([]byte(normalizeZoneName(string(a))), []byte(normalizeZoneName(string(b))))
-}
-
-func (m Matcher) String() string {
-	args := make([]string, 0, 3)
-
-	if m.Domain != nil {
-		args = append(args, fmt.Sprintf("domain:%s", m.Domain))
-	}
-	if m.RRType > 0 {
-		args = append(args, fmt.Sprintf("rrtype:%s", dns.TypeToString[m.RRType]))
-	}
-	if m.Values != nil {
-		args = append(args, fmt.Sprintf("value:%v", m.Values))
-	}
-
-	return fmt.Sprintf("Match(%s)", strings.Join(args, " "))
-}
-
-func (mm Matchers) Match(e zonefile.Entry) bool {
-	for _, m := range mm {
-		if m.Match(e) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (s *File) load() (zf *zonefile.Zonefile, soa *zonefile.Entry, err error) {
+// load reads and parses the zone file. Every record gets an explicit owner
+// relative to the zone origin (see masterfile.Parse). The origin is the SOA
+// owner; it must stay the same across loads.
+func (s *File) load() (*masterfile.Zone, error) {
 	buf, err := os.ReadFile(s.path)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	var zfErr *zonefile.ParsingError
-	zf, zfErr = zonefile.Load(buf)
-	if zfErr != nil {
-		return nil, nil, zfErr
-	}
-
-	// The zone apex is the SOA owner, resolved against the $ORIGIN in effect
-	// there. Names before the first $ORIGIN are relative to the apex.
-	entries := zf.Entries()
-	cur := s.origin
-	prev := ""
-	origin := ""
-	for i := range entries {
-		ent := &entries[i]
-		switch {
-		case ent.IsComment:
-		case ent.IsControl:
-			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-				cur = string(zonefile.Fqdn(ent.Values()[0]))
-			}
-		default:
-			if dom := string(ent.Domain()); dom != "" {
-				prev = absName(dom, cur)
-			}
-			if ent.RRType() == dns.TypeSOA && origin == "" {
-				origin = prev
-				soa = ent
-			}
+	z, err := masterfile.Parse(buf, s.origin)
+	if err != nil {
+		if errors.Is(err, masterfile.ErrApexMismatch) {
+			return nil, fmt.Errorf("%w: prev=%s: %w", ErrOriginChanged, s.origin, err)
 		}
+		return nil, err
 	}
-	if soa == nil {
-		return nil, nil, ErrSoaNotFound
-	}
-	if !dns.IsFqdn(origin) {
-		return nil, nil, fmt.Errorf("%w: cannot determine the zone origin, set $ORIGIN or use an absolute SOA owner", ErrSoaNotFound)
-	}
-
-	// Give every record an explicit owner, relative to the apex (absolute
-	// when outside of it). Inherited owners and later $ORIGIN directives are
-	// resolved first, so the name means the same wherever it is printed.
-	cur = origin
-	prev = ""
-	for i := range entries {
-		ent := &entries[i]
+	if err := z.Check(); err != nil {
 		switch {
-		case ent.IsComment:
-		case ent.IsControl:
-			if bytes.Equal(ent.Command(), []byte("$ORIGIN")) {
-				cur = string(zonefile.Fqdn(ent.Values()[0]))
-			}
-		default:
-			if dom := string(ent.Domain()); dom != "" {
-				prev = absName(dom, cur)
-			}
-			if err = ent.SetDomain([]byte(StripOrigin(prev, origin))); err != nil {
-				return
-			}
+		case errors.Is(err, masterfile.ErrNoSOA):
+			return nil, ErrSoaNotFound
+		case errors.Is(err, masterfile.ErrNoOrigin):
+			return nil, fmt.Errorf("%w: cannot determine the zone origin, set $ORIGIN or use an absolute SOA owner", ErrSoaNotFound)
 		}
+		return nil, err
 	}
 
 	if s.origin == "" {
-		s.lg.Info("Detected origin", "origin", origin)
-		s.origin = origin
-	} else if s.origin != origin {
-		return nil, nil, fmt.Errorf("%w: prev=%s new=%s", ErrOriginChanged, s.origin, origin)
+		s.origin = z.Apex()
+		s.lg.Info("Detected origin", "origin", s.origin)
 	}
 
-	return
+	return z, nil
 }
 
-func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Matchers, values []zonefile.Entry, replaceAll bool, anchor []byte, allowNew bool) (changed bool, err error) {
-	ctx, span := zoneTracer.Start(ctx, "zone.file.update_records")
+// apply runs the operations on the zone file and rewrites it atomically when
+// the zone's meaning changed; the written file is verified first (see
+// masterfile.Zone.Commit). Callers must hold s.mu.
+func (s *File) apply(ctx context.Context, lg *slog.Logger, ops ...masterfile.Op) (changed bool, err error) {
+	ctx, span := zoneTracer.Start(ctx, "zone.file.apply")
 	span.SetAttributes(
 		attribute.String("zone.file", path.Base(s.path)),
-		attribute.Bool("zone.allow_new", allowNew),
-		attribute.Bool("zone.replace_all", replaceAll),
-		attribute.Int("zone.matcher_count", len(matchers)),
-		attribute.Int("zone.new_entry_count", len(values)),
+		attribute.Int("zone.op_count", len(ops)),
 	)
 	defer func() {
 		span.SetAttributes(attribute.Bool("zone.changed", changed))
@@ -531,144 +400,75 @@ func (s *File) updateRecords(ctx context.Context, lg1 *slog.Logger, matchers Mat
 		span.End()
 	}()
 
-	lg := lg1.With("matchers", matchers)
-
-	if len(matchers) == 0 {
-		return false, ErrNoMatchers
-	}
-
-	zf, _, err := s.load()
+	z, err := s.load()
 	if err != nil {
-		return
-	}
-
-	// 1. Copy all non-matching elements, insert new values on the place of first element
-	oldEntries := zf.Entries()
-	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
-	found := false
-	matchedCount := 0
-	// Comments of replaced records move to the first new record. Without
-	// new values (a delete) they go away with their records.
-	insertAt := -1
-	var carried [][]byte
-	for idx, ent := range oldEntries {
-		if matchers.Match(ent) {
-			matchedCount++
-			if !found {
-				lg.DebugContext(ctx, "First matching record found", "index", idx, "old_values", ent.ValuesStrings())
-				insertAt = len(newEntries)
-				carried = append(carried, ent.Comments()...)
-				newEntries = append(newEntries, values...)
-				found = true
-				continue
-			}
-			if replaceAll {
-				lg.DebugContext(ctx, "Remove duplicate matching record", "index", idx, "old_values", ent.ValuesStrings())
-				carried = append(carried, ent.Comments()...)
-				continue
-			}
-			lg.DebugContext(ctx, "Keep extra matching record", "index", idx, "old_values", ent.ValuesStrings())
-		}
-
-		newEntries = append(newEntries, ent)
-	}
-	span.SetAttributes(
-		attribute.Int("zone.old_entry_count", len(oldEntries)),
-		attribute.Int("zone.matched_entry_count", matchedCount),
-	)
-	if insertAt >= 0 && len(values) > 0 {
-		newEntries[insertAt] = newEntries[insertAt].WithComments(carried)
-	}
-
-	// 2. If old record not found - add new values, if allowed
-	if !found {
-		if !allowNew {
-			lg.ErrorContext(ctx, "No matching record not found, but insert is not allowed.")
-			return false, ErrRecordNotFound
-		}
-
-		if anchor != nil {
-			if idx := anchorInsertIndex(newEntries, anchor); idx >= 0 {
-				lg.DebugContext(ctx, "No matching record not found, inserting after anchor", "index", idx)
-				newEntries = slices.Insert(newEntries, idx+1, values...)
-				span.SetAttributes(attribute.Int("zone.anchor_index", idx))
-			} else {
-				lg.DebugContext(ctx, "No matching record not found, no anchor found, inserting to the end")
-				newEntries = append(newEntries, values...)
-			}
-		} else {
-			lg.DebugContext(ctx, "No matching record not found, but inserting to the end")
-			newEntries = append(newEntries, values...)
-		}
-	}
-	span.SetAttributes(attribute.Int("zone.result_entry_count", len(newEntries)))
-
-	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
-}
-
-// saveIfChanged compares the old and new entry lists and atomically rewrites
-// the zone file when they differ. Callers must hold s.mu.
-func (s *File) saveIfChanged(ctx context.Context, lg *slog.Logger, oldEntries, newEntries []zonefile.Entry) (changed bool, err error) {
-	changed = !slices.EqualFunc(oldEntries, newEntries, func(e1, e2 zonefile.Entry) bool {
-		return e1.Equal(e2)
-	})
-
-	if !changed {
-		lg.InfoContext(ctx, "No records changed", "changed", changed)
-		return
-	}
-
-	uglyBuf := bytes.NewBuffer(nil)
-	PrintEntries(s.origin, newEntries, uglyBuf)
-
-	ret := bytes.NewBuffer(nil)
-	err = dnsfmt.Reformat(uglyBuf.Bytes(), nil, ret, true)
-	if err != nil {
-		return
-	}
-
-	// Never write a file the formatter may have damaged.
-	if err = verifyReformat(s.origin, uglyBuf.Bytes(), ret.Bytes()); err != nil {
-		lg.ErrorContext(ctx, "Zone file verification failed, not saving", "error", err)
 		return false, err
 	}
 
-	err = fileutil.AtomicWriteFile(s.path, ret.Bytes())
+	results, err := z.Apply(ops...)
 	if err != nil {
+		if errors.Is(err, masterfile.ErrNotFound) {
+			lg.ErrorContext(ctx, "No matching record found, but insert is not allowed")
+			return false, fmt.Errorf("%w: %w", ErrRecordNotFound, err)
+		}
+		return false, err
+	}
+	for i, r := range results {
+		lg.DebugContext(ctx, "Operation applied",
+			"op", fmt.Sprintf("%T%+v", ops[i], ops[i]),
+			"matched", r.Matched, "removed", r.Removed, "inserted", r.Inserted, "index", r.Index, "changed", r.Changed)
+	}
+
+	data, changed, err := z.Commit(true)
+	if err != nil {
+		lg.ErrorContext(ctx, "Zone file verification failed, not saving", "error", err)
+		return false, err
+	}
+	if !changed {
+		lg.InfoContext(ctx, "No records changed", "changed", changed)
+		return false, nil
+	}
+
+	if err = fileutil.AtomicWriteFile(s.path, data); err != nil {
 		lg.ErrorContext(ctx, "Failed to save file", "error", err, "changed", changed)
-		return
+		return false, err
 	}
 
 	lg.InfoContext(ctx, "File saved", "changed", changed)
-	return
+	return true, nil
 }
 
-// anchorInsertIndex returns the index of the last entry before which the
-// new values should be inserted: the last entry with the same domain as the
-// anchor, or, if none, the last _acme-challenge.* entry. Returns -1 if there
-// is no suitable place, in which case new values are appended to the end.
-func anchorInsertIndex(entries []zonefile.Entry, anchor []byte) int {
-	same, acme := -1, -1
-	for i, e := range entries {
-		if e.IsComment || e.IsControl {
-			continue
-		}
-		d := e.Domain()
-		if d == nil {
-			continue
-		}
-		if dnsNamesEqual(d, anchor) {
-			same = i
-			continue
-		}
-		if strings.HasPrefix(strings.ToLower(normalizeZoneName(string(d))), "_acme-challenge.") {
-			acme = i
-		}
+// ttlValue checks a client-supplied TTL; 0 means no explicit TTL.
+func ttlValue(ttl int) (uint32, error) {
+	if ttl < 0 || ttl > math.MaxInt32 {
+		return 0, fmt.Errorf("%w: ttl %d out of range", ErrInvalidRecord, ttl)
 	}
-	if same >= 0 {
-		return same
+	return uint32(ttl), nil
+}
+
+// rrs builds the records of one RRset for the editing operations.
+func rrs(rtype uint16, ttl uint32, contents []string) []masterfile.RR {
+	ret := make([]masterfile.RR, 0, len(contents))
+	for _, c := range contents {
+		ret = append(ret, masterfile.RR{Type: rtype, TTL: ttl, Content: c})
 	}
-	return acme
+	return ret
+}
+
+// acmePlacement puts a new challenge record after the records of its own
+// name, else after the last _acme-challenge record in the file, else at the
+// end.
+func acmePlacement(name string) masterfile.Placement {
+	return masterfile.Placement{{Owner: name}, {Prefix: "_acme-challenge"}}
+}
+
+func parseRRType(typ string) (uint16, error) {
+	typ = strings.ToUpper(strings.TrimSpace(typ))
+	rrType, ok := dns.StringToType[typ]
+	if !ok {
+		return 0, fmt.Errorf("unknown rrtype: %s", typ)
+	}
+	return rrType, nil
 }
 
 // UpdatePTR updates PTR records for the requested addresses in matching reverse
@@ -699,18 +499,12 @@ func (s *DomainCtrl) UpdatePTR(ctx context.Context, target string, addresses []n
 		return false, fmt.Errorf("invalid PTR update mode: %q", mode)
 	}
 
-	targetDot := target
-	if !strings.HasSuffix(targetDot, ".") {
-		targetDot += "."
-	}
+	targetDot := normalizeZoneName(target)
 
 	revNames := make([]string, 0, len(addresses))
 	zones := make([]*File, 0, len(addresses))
 	for _, addr := range addresses {
-		name, err := dns.ReverseAddr(addr.String())
-		if err != nil {
-			return false, fmt.Errorf("failed to build reverse name for %s: %w", addr, err)
-		}
+		name := masterfile.ReverseName(addr)
 		revNames = append(revNames, name)
 
 		fl := s.findZoneFile(ctx, lg.With("domain", name), name)
@@ -745,18 +539,11 @@ func (s *DomainCtrl) UpdatePTR(ctx context.Context, target string, addresses []n
 // removes stale PTR records pointing to the target, skipping addresses without
 // a matching reverse zone.
 func (s *DomainCtrl) updatePTRRecords(ctx context.Context, lg *slog.Logger, target string, addrs []netip.Addr) {
-	targetDot := target
-	if !strings.HasSuffix(targetDot, ".") {
-		targetDot += "."
-	}
+	targetDot := normalizeZoneName(target)
 
 	revNames := make([]string, 0, len(addrs))
 	for _, addr := range addrs {
-		name, err := dns.ReverseAddr(addr.String())
-		if err != nil {
-			lg.WarnContext(ctx, "Failed to build reverse name", "addr", addr, "error", err)
-			continue
-		}
+		name := masterfile.ReverseName(addr)
 		revNames = append(revNames, name)
 
 		fl := s.findZoneFile(ctx, lg.With("domain", name), name)
@@ -790,7 +577,7 @@ func (s *DomainCtrl) removeStalePTR(ctx context.Context, lg *slog.Logger, target
 	}
 
 	for _, fl := range s.files {
-		if !isReverseZone(fl.origin) {
+		if !masterfile.IsReverseZone(fl.origin) {
 			continue
 		}
 		names, err := fl.findPTRRecords(ctx, target)
@@ -810,13 +597,6 @@ func (s *DomainCtrl) removeStalePTR(ctx context.Context, lg *slog.Logger, target
 		}
 	}
 	return changed, nil
-}
-
-// isReverseZone reports whether the zone origin is a reverse zone
-// (in-addr.arpa or ip6.arpa tree).
-func isReverseZone(origin string) bool {
-	o := strings.ToLower(normalizeZoneName(origin))
-	return strings.HasSuffix(o, ".in-addr.arpa.") || strings.HasSuffix(o, ".ip6.arpa.")
 }
 
 // UpdatePTRAddress sets the PTR record for ptrName to target in the zone,
@@ -844,28 +624,22 @@ func (s *File) UpdatePTRAddress(ctx context.Context, ptrName, target string, mod
 
 	lg := s.lg.With("ptr_name", ptrName, "ptr_target", target, "mode", string(mode))
 
-	shortName := []byte(StripOrigin(ptrName, s.origin))
-
-	var matchers Matchers
-	replaceAll := true
+	op := masterfile.Replace{
+		Selector:  masterfile.Selector{Owner: ptrName, Types: []uint16{dns.TypePTR}},
+		Records:   rrs(dns.TypePTR, 0, []string{target}),
+		Placement: masterfile.Placement{{Owner: ptrName}},
+	}
 	switch mode {
 	case PTRUpdateAppend:
-		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR, Values: [][]byte{[]byte(target)}}}
+		op.Contents = []string{target}
 	case PTRUpdateReplace:
-		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR}}
-		replaceAll = false
+		op.Mode = masterfile.ReplaceFirst
 	case PTRUpdateReplaceAll:
-		matchers = Matchers{{Domain: shortName, RRType: dns.TypePTR}}
 	default:
 		return false, fmt.Errorf("invalid PTR update mode: %q", mode)
 	}
 
-	values, err := parseEntries(bytes.NewBufferString(fmt.Sprintf("\n%s IN PTR %s\n", shortName, target)))
-	if err != nil {
-		return false, err
-	}
-
-	return s.updateRecords(ctx, lg, matchers, values, replaceAll, shortName, true)
+	return s.apply(ctx, lg, op)
 }
 
 // DeletePTRRecord removes the PTR record for ptrName pointing to target.
@@ -875,40 +649,24 @@ func (s *File) DeletePTRRecord(ctx context.Context, ptrName, target string) (cha
 
 	lg := s.lg.With("ptr_name", ptrName, "ptr_target", target)
 
-	matchers := Matchers{{Domain: []byte(StripOrigin(ptrName, s.origin)), RRType: dns.TypePTR, Values: [][]byte{[]byte(target)}}}
-	return s.updateRecords(ctx, lg, matchers, nil, true, nil, false)
+	return s.apply(ctx, lg, masterfile.Delete{Selector: masterfile.Selector{
+		Owner: ptrName, Types: []uint16{dns.TypePTR}, Contents: []string{target},
+	}})
 }
 
 // findPTRRecords returns the absolute names of PTR records in the zone that
 // point to target.
-func (s *File) findPTRRecords(ctx context.Context, target string) (names []string, err error) {
-	zf, _, err := s.load()
+func (s *File) findPTRRecords(_ context.Context, target string) (names []string, err error) {
+	z, err := s.load()
 	if err != nil {
 		return nil, err
 	}
-
-	prevDomain := []byte{}
-	for _, ent := range zf.Entries() {
-		if ent.IsComment || ent.IsControl {
-			continue
-		}
-		d := ent.Domain()
-		if d == nil {
-			d = prevDomain
-		} else {
-			prevDomain = d
-		}
-		if ent.RRType() != dns.TypePTR {
-			continue
-		}
-		vals := ent.Values()
-		if len(vals) == 1 && bytes.Equal(vals[0], []byte(target)) {
-			names = append(names, absoluteRecordName(d, s.origin))
-		}
-	}
-	return names, nil
+	return z.Owners(masterfile.Selector{Types: []uint16{dns.TypePTR}, Contents: []string{target}}), nil
 }
 
+// UpdateDDNSAddress makes the A and AAAA records of domain exactly the given
+// addresses. Only the families present in addrs are touched: an update with
+// IPv4 addresses alone keeps the AAAA records.
 func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []netip.Addr) error {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_ddns_address")
 	span.SetAttributes(
@@ -923,57 +681,59 @@ func (s *File) UpdateDDNSAddress(ctx context.Context, domain string, addrs []net
 
 	lg := s.lg.With("domain", domain, "new_addrs", addrs)
 
-	slices.SortFunc(addrs, func(a, b netip.Addr) int {
-		return a.Compare(b)
-	})
+	if len(addrs) == 0 {
+		recordSpanError(span, ErrNoAddresses)
+		return ErrNoAddresses
+	}
 
-	newA := make([]netip.Addr, 0, len(addrs))
-	newAAAA := make([]netip.Addr, 0, len(addrs))
+	addrs = slices.Clone(addrs)
+	slices.SortFunc(addrs, netip.Addr.Compare)
+
+	var v4, v6 []string
 	for _, a := range addrs {
 		if a.Is4() {
-			newA = append(newA, a)
+			v4 = append(v4, a.String())
 			continue
 		}
-		newAAAA = append(newAAAA, a)
+		v6 = append(v6, a.String())
 	}
 	span.SetAttributes(
-		attribute.Int("zone.addr_v4_count", len(newA)),
-		attribute.Int("zone.addr_v6_count", len(newAAAA)),
+		attribute.Int("zone.addr_v4_count", len(v4)),
+		attribute.Int("zone.addr_v6_count", len(v6)),
 	)
 
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-	newentbuf := bytes.NewBuffer(nil)
-
-	for _, addr := range newA {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s IN A %v\n", shortDomain, addr)
+	var types []uint16
+	var records []masterfile.RR
+	if len(v4) > 0 {
+		types = append(types, dns.TypeA)
+		records = append(records, rrs(dns.TypeA, 0, v4)...)
 	}
-	for _, addr := range newAAAA {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s IN AAAA %v\n", shortDomain, addr)
+	if len(v6) > 0 {
+		types = append(types, dns.TypeAAAA)
+		records = append(records, rrs(dns.TypeAAAA, 0, v6)...)
 	}
 
-	values, err := parseEntries(newentbuf)
+	_, err := s.apply(ctx, lg, masterfile.Replace{
+		Selector: masterfile.Selector{Owner: domain, Types: types},
+		Records:  records,
+	})
 	if err != nil {
 		recordSpanError(span, err)
 		return err
 	}
-
-	matchers := make(Matchers, 0, 2)
-	if len(newA) > 0 {
-		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeA})
-	}
-	if len(newAAAA) > 0 {
-		matchers = append(matchers, Matcher{Domain: shortDomain, RRType: dns.TypeAAAA})
-	}
-
-	_, err = s.updateRecords(ctx, lg, matchers, values, true, nil, true)
-	if err != nil {
-		recordSpanError(span, err)
-		return err
-	}
-
 	return nil
 }
 
+// UpdateACMEChallenge presents or cleans up a dns-01 challenge TXT record.
+//
+//   - newToken set, oldToken empty (ACME DNS mode): every TXT of the name is
+//     replaced by newToken;
+//   - newToken and oldToken set (HTTP-REQ mode): only a TXT equal to oldToken
+//     is replaced, other tokens of the name stay (wildcard + apex orders
+//     present two tokens for one name);
+//   - newToken empty, oldToken set (cleanup): oldToken is removed and exactly
+//     one placeholder TXT is left for the name, so the name keeps existing;
+//   - both empty: every TXT of the name becomes the placeholder.
 func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken, oldToken string) (err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_acme_challenge")
 	span.SetAttributes(
@@ -991,117 +751,45 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	defer s.mu.Unlock()
 
 	lg := s.lg.With("domain", domain, "old_token", oldToken, "new_token", newToken)
-	cleanup := newToken == "" && oldToken != ""
-	if newToken == "" {
-		lg.Warn("Use placeholder for empty TXT record")
-		newToken = EmptyPlaceholder
-	}
 
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-
-	newentbuf := bytes.NewBuffer(nil)
-	if s.acmeTTL > 0 {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s %d IN TXT %v\n", shortDomain, s.acmeTTL, quoteTXT(newToken))
-	} else {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s IN TXT %v\n", shortDomain, quoteTXT(newToken))
-	}
-
-	values, err := parseEntries(newentbuf)
+	ttl, err := ttlValue(s.acmeTTL)
 	if err != nil {
 		return err
 	}
 
-	if cleanup {
-		_, err = s.cleanupACMEChallenge(ctx, lg, shortDomain, oldToken, values)
-		return err
-	}
-
-	var oldValues [][]byte // nil - ACME DNS mode - replace all TXTs
-	if oldToken != "" {    // HTTP-REQ mode - replace only matching old token
-		oldValues = [][]byte{
-			[]byte(oldToken),
+	var op masterfile.Op
+	switch {
+	case newToken == "" && oldToken != "":
+		op = masterfile.Collapse{
+			Owner:     domain,
+			Type:      dns.TypeTXT,
+			Drop:      []string{oldToken},
+			Keep:      EmptyPlaceholder,
+			KeepTTL:   ttl,
+			Placement: acmePlacement(domain),
+		}
+	default:
+		if newToken == "" {
+			lg.Warn("Use placeholder for empty TXT record")
+			newToken = EmptyPlaceholder
+		}
+		sel := masterfile.Selector{Owner: domain, Types: []uint16{dns.TypeTXT}}
+		if oldToken != "" {
+			sel.Contents = []string{oldToken}
+		}
+		op = masterfile.Replace{
+			Selector:  sel,
+			Records:   rrs(dns.TypeTXT, ttl, []string{newToken}),
+			Placement: acmePlacement(domain),
 		}
 	}
 
-	matchers := []Matcher{
-		{
-			Domain: shortDomain,
-			RRType: dns.TypeTXT,
-			Values: oldValues,
-		},
-	}
-
-	_, err = s.updateRecords(ctx, lg, matchers, values, true, shortDomain, true)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	_, err = s.apply(ctx, lg, op)
+	return err
 }
 
-// cleanupACMEChallenge removes a single challenge token while keeping exactly
-// one placeholder TXT entry for the name. The token entry is replaced by the
-// placeholder only when no placeholder is left; otherwise it is dropped, and
-// duplicate placeholders (e.g. from earlier cleanups) are collapsed. If the
-// name has no TXT entry at all, a placeholder is added. Callers must hold s.mu.
-func (s *File) cleanupACMEChallenge(ctx context.Context, lg *slog.Logger, shortDomain []byte, token string, placeholder []zonefile.Entry) (changed bool, err error) {
-	zf, _, err := s.load()
-	if err != nil {
-		return false, err
-	}
-
-	oldEntries := zf.Entries()
-	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
-
-	hasPlaceholder := false
-	placeholderAt := -1
-	firstDropped := -1
-	// Comments of dropped entries move to the placeholder that stays.
-	var carried [][]byte
-	for _, ent := range oldEntries {
-		if ent.IsComment || ent.IsControl || ent.RRType() != dns.TypeTXT || !dnsNamesEqual(ent.Domain(), shortDomain) {
-			newEntries = append(newEntries, ent)
-			continue
-		}
-
-		switch val := string(bytes.Join(ent.Values(), nil)); val {
-		case token:
-			if firstDropped < 0 {
-				firstDropped = len(newEntries)
-			}
-			carried = append(carried, ent.Comments()...)
-			continue
-		case EmptyPlaceholder:
-			if hasPlaceholder {
-				lg.DebugContext(ctx, "Drop duplicate placeholder")
-				carried = append(carried, ent.Comments()...)
-				continue
-			}
-			hasPlaceholder = true
-			placeholderAt = len(newEntries)
-		}
-
-		newEntries = append(newEntries, ent)
-	}
-
-	if !hasPlaceholder {
-		switch {
-		case firstDropped >= 0:
-			placeholderAt = firstDropped
-		default:
-			if idx := anchorInsertIndex(newEntries, shortDomain); idx >= 0 {
-				placeholderAt = idx + 1
-			} else {
-				placeholderAt = len(newEntries)
-			}
-		}
-		newEntries = slices.Insert(newEntries, placeholderAt, placeholder...)
-	}
-	newEntries[placeholderAt] = newEntries[placeholderAt].WithComments(carried)
-
-	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
-}
-
+// ZMUpdateRecord replaces the values of an existing RRset; a name and type
+// without records is ErrRecordNotFound.
 func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, ttl int, newValues []string) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.update_record")
 	span.SetAttributes(
@@ -1121,43 +809,26 @@ func (s *File) ZMUpdateRecord(ctx context.Context, domain string, typ string, tt
 
 	lg := s.lg.With("domain", domain, "new_values", newValues)
 
-	typ = strings.ToUpper(strings.TrimSpace(typ))
-	rrType, ok := dns.StringToType[typ]
-	if !ok {
-		return false, fmt.Errorf("unknown rrtype: %s", typ)
+	rrType, err := parseRRType(typ)
+	if err != nil {
+		return false, err
 	}
-
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-	newentbuf := bytes.NewBuffer(nil)
-
-	for _, val := range newValues {
-		if ttl > 0 {
-			_, _ = fmt.Fprintf(newentbuf, "\n%s %d IN %s %s\n", shortDomain, ttl, typ, val)
-		} else {
-			_, _ = fmt.Fprintf(newentbuf, "\n%s IN %s %s\n", shortDomain, typ, val)
-		}
-	}
-
-	values, err := parseEntries(newentbuf)
+	ttl32, err := ttlValue(ttl)
 	if err != nil {
 		return false, err
 	}
 
-	matchers := []Matcher{
-		{
-			Domain: shortDomain,
-			RRType: rrType,
-		},
-	}
-
-	return s.updateRecords(ctx, lg, matchers, values, true, nil, false)
+	return s.apply(ctx, lg, masterfile.Replace{
+		Selector:  masterfile.Selector{Owner: domain, Types: []uint16{rrType}},
+		Records:   rrs(rrType, ttl32, newValues),
+		MustExist: true,
+	})
 }
 
-// ApplyRecordUpdate adds and/or removes individual values of an existing RRSet.
-// The position of the RRSet in the zone file is preserved: additions are
-// inserted after the last existing value of the same name/type and removals
-// only drop the matching value entries. Adding an already present value and
-// removing a missing value are no-ops.
+// ApplyRecordUpdate adds and/or removes individual values of an RRset, as a
+// DNS UPDATE does. The RRset keeps its place in the zone file: additions go
+// after its last existing value and removals only drop the matching value.
+// Adding an already present value and removing a missing value are no-ops.
 func (s *File) ApplyRecordUpdate(ctx context.Context, domain string, typ string, ttl int, add []string, remove []string) (changed bool, err error) {
 	ctx, span := zoneTracer.Start(ctx, "zone.file.apply_record_update")
 	span.SetAttributes(
@@ -1178,76 +849,22 @@ func (s *File) ApplyRecordUpdate(ctx context.Context, domain string, typ string,
 
 	lg := s.lg.With("domain", domain, "rr_type", typ, "add", add, "remove", remove)
 
-	typ = strings.ToUpper(strings.TrimSpace(typ))
-	rrType, ok := dns.StringToType[typ]
-	if !ok {
-		return false, fmt.Errorf("unknown rrtype: %s", typ)
+	rrType, err := parseRRType(typ)
+	if err != nil {
+		return false, err
 	}
-
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-
-	zf, _, err := s.load()
+	ttl32, err := ttlValue(ttl)
 	if err != nil {
 		return false, err
 	}
 
-	removeSet := make(map[string]struct{}, len(remove))
-	for _, v := range remove {
-		removeSet[strings.TrimSpace(v)] = struct{}{}
-	}
-
-	oldEntries := zf.Entries()
-	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
-
-	existing := make(map[string]struct{})
-	lastMatch := -1
-
-	for _, ent := range oldEntries {
-		if !ent.IsComment && !ent.IsControl &&
-			dnsNamesEqual(ent.Domain(), shortDomain) && bytes.Equal(ent.Type(), []byte(typ)) {
-			val := strings.Join(ent.ValuesStrings(), "")
-			if _, drop := removeSet[strings.TrimSpace(val)]; drop {
-				continue
-			}
-			existing[strings.TrimSpace(val)] = struct{}{}
-			newEntries = append(newEntries, ent)
-			lastMatch = len(newEntries) - 1
-			continue
-		}
-
-		newEntries = append(newEntries, ent)
-	}
-
-	added := make([]zonefile.Entry, 0, len(add))
-	for _, val := range add {
-		if _, ok := existing[strings.TrimSpace(val)]; ok {
-			continue
-		}
-
-		entbuf := bytes.NewBuffer(nil)
-		if ttl > 0 {
-			_, _ = fmt.Fprintf(entbuf, "\n%s %d IN %s %s\n", shortDomain, ttl, typ, formatRecordValue(rrType, val))
-		} else {
-			_, _ = fmt.Fprintf(entbuf, "\n%s IN %s %s\n", shortDomain, typ, formatRecordValue(rrType, val))
-		}
-
-		ents, err := parseEntries(entbuf)
-		if err != nil {
-			return false, err
-		}
-		added = append(added, ents...)
-		existing[strings.TrimSpace(val)] = struct{}{}
-	}
-
-	if len(added) > 0 {
-		if lastMatch >= 0 {
-			newEntries = slices.Insert(newEntries, lastMatch+1, added...)
-		} else {
-			newEntries = append(newEntries, added...)
-		}
-	}
-
-	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
+	return s.apply(ctx, lg, masterfile.AddRemove{
+		Owner:  domain,
+		Type:   rrType,
+		TTL:    ttl32,
+		Add:    add,
+		Remove: remove,
+	})
 }
 
 // RemoveRecordName removes all RRsets that belong to a record name.
@@ -1268,153 +885,5 @@ func (s *File) RemoveRecordName(ctx context.Context, domain string) (changed boo
 
 	lg := s.lg.With("domain", domain)
 
-	shortDomain := []byte(StripOrigin(domain, s.origin))
-
-	zf, _, err := s.load()
-	if err != nil {
-		return false, err
-	}
-
-	oldEntries := zf.Entries()
-	newEntries := make([]zonefile.Entry, 0, len(oldEntries))
-	for _, ent := range oldEntries {
-		if !ent.IsComment && !ent.IsControl && dnsNamesEqual(ent.Domain(), shortDomain) {
-			continue
-		}
-		newEntries = append(newEntries, ent)
-	}
-
-	return s.saveIfChanged(ctx, lg, oldEntries, newEntries)
-}
-
-func StripOrigin(name, origin string) string {
-	name = strings.TrimSpace(name)
-	origin = strings.TrimSpace(origin)
-	nameFQDN := normalizeZoneName(name)
-	originFQDN := normalizeZoneName(origin)
-
-	if !domainMatchesOrigin(nameFQDN, originFQDN) {
-		return name
-	}
-
-	if dnsfmt.NameEqual([]byte(nameFQDN), []byte(originFQDN)) {
-		return "@"
-	}
-
-	l1 := len(nameFQDN)
-	l2 := len(originFQDN)
-	if l1 <= l2 {
-		return "@"
-	}
-
-	// strip suffix + dot
-	return nameFQDN[:l1-l2-1]
-}
-
-// absName resolves a (possibly relative) owner name against origin.
-func absName(name, origin string) string {
-	switch {
-	case name == "@":
-		return origin
-	case dns.IsFqdn(name):
-		return name
-	case origin == "" || origin == ".":
-		return name + "."
-	default:
-		return name + "." + origin
-	}
-}
-
-// PrintEntries writes entries as a plain zone file. Owner names are taken as
-// relative to the zone origin (as load sets them) and written relative to
-// the $ORIGIN in effect at their line.
-func PrintEntries(origin string, entries []zonefile.Entry, w io.Writer) {
-	cur := origin
-	for _, e := range entries {
-		if e.IsControl && bytes.Equal(e.Command(), []byte("$ORIGIN")) {
-			cur = string(zonefile.Fqdn(e.Values()[0]))
-		}
-		if e.IsBlank() {
-			fmt.Fprintln(w) // nolint:errcheck
-			continue
-		} else if e.IsComment {
-			for _, c := range e.Comments() {
-				fmt.Fprintf(w, "%s\n", c) // nolint:errcheck
-			}
-			continue
-		} else if e.IsControl {
-			values := e.RawValues()
-			if bytes.Equal(e.Command(), []byte("$ORIGIN")) && len(values) > 0 {
-				// zoneomatic always treats $ORIGIN as absolute.
-				values = append([][]byte{zonefile.Fqdn(values[0])}, values[1:]...)
-			}
-			fmt.Fprintf(w, "%s %s", e.Command(), bytes.Join(values, []byte(" "))) // nolint:errcheck
-			for _, c := range e.Comments() {
-				fmt.Fprintf(w, " %s", c) // nolint:errcheck
-			}
-			fmt.Fprintln(w) // nolint:errcheck
-			continue
-		}
-
-		if name := string(e.Domain()); name != "" {
-			fmt.Fprintf(w, "%s ", StripOrigin(absName(name, origin), cur)) // nolint:errcheck
-		} else {
-			fmt.Fprint(w, " ") // nolint:errcheck
-		}
-		if ttl := e.TTL(); ttl != nil {
-			fmt.Fprintf(w, " %d ", *ttl) // nolint:errcheck
-		}
-		if cls := e.Class(); cls != nil {
-			fmt.Fprintf(w, " %s ", cls) // nolint:errcheck
-		}
-		if typ := e.Type(); typ != nil {
-			fmt.Fprintf(w, " %s ", typ) // nolint:errcheck
-		}
-
-		// Comments stay next to the value they follow; a comment before or
-		// between values needs the multi-line ( ... ) form.
-		values := e.RawValues()
-		head, after := e.ValueComments()
-		if len(head) == 0 && !slices.ContainsFunc(after[:max(len(after)-1, 0)], func(c [][]byte) bool { return len(c) > 0 }) {
-			fmt.Fprintf(w, " %s", bytes.Join(values, []byte(" "))) // nolint:errcheck
-			if len(after) > 0 {
-				printComments(w, after[len(after)-1])
-			}
-			fmt.Fprintln(w) // nolint:errcheck
-			continue
-		}
-
-		fmt.Fprint(w, " (") // nolint:errcheck
-		printComments(w, head)
-		fmt.Fprintln(w) // nolint:errcheck
-		for i, v := range values {
-			fmt.Fprintf(w, "    %s", v) // nolint:errcheck
-			printComments(w, after[i])
-			fmt.Fprintln(w) // nolint:errcheck
-		}
-		fmt.Fprintln(w, ")") // nolint:errcheck
-	}
-}
-
-// printComments writes comments at the end of the current line. Several
-// comments are joined, as only one fits on a line.
-func printComments(w io.Writer, comments [][]byte) {
-	if len(comments) == 0 {
-		return
-	}
-	fmt.Fprintf(w, " %s", bytes.Join(comments, []byte(" "))) // nolint:errcheck
-}
-
-// quoteTXT renders a raw value as a quoted zone file string; see dnsfmt.Quote.
-func quoteTXT(v string) string {
-	return " " + dnsfmt.Quote([]byte(v)) + " "
-}
-
-func parseEntries(zonebuf *bytes.Buffer) ([]zonefile.Entry, error) {
-	zf, err := zonefile.Load(zonebuf.Bytes())
-	if err != nil {
-		return nil, err
-	}
-
-	return zf.Entries(), nil
+	return s.apply(ctx, lg, masterfile.DeleteOwner{Owner: domain})
 }
