@@ -16,7 +16,7 @@ $TTL 60
 ; Existing record
 loop                IN A    127.0.0.1
                     IN AAAA ::1
+new-entry           IN A    1.2.3.4
 
 ; sub-domain challenge
 _acme-challenge.zot IN TXT  "8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs"
-new-entry           IN A    1.2.3.4

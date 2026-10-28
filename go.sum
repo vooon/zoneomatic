@@ -75,8 +75,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/thejerf/slogassert v0.3.4 h1:VoTsXixRbXMrRSSxDjYTiEDCM4VWbsYPW5rB/hX24kM=
 github.com/thejerf/slogassert v0.3.4/go.mod h1:0zn9ISLVKo1aPMTqcGfG1o6dWwt+Rk574GlUxHD4rs8=
-github.com/vooon/go-masterfile v0.2.1 h1:zP7BVzqj3RoGZ5VNtDc3+xOPOxe97Z9qJLt9o+oHISY=
-github.com/vooon/go-masterfile v0.2.1/go.mod h1:eZSaDOByZyw1BsifJstYuP68bQ3S6lhlox7dMBjiBFA=
+github.com/vooon/go-masterfile v0.2.2 h1:rocxM28BEip3I85YJYYkoS+pf8MHtbKeIQQ6OK4xWTc=
+github.com/vooon/go-masterfile v0.2.2/go.mod h1:eZSaDOByZyw1BsifJstYuP68bQ3S6lhlox7dMBjiBFA=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/bridges/otelslog v0.21.0 h1:/CdgE52i1OEPHhsGUqrggYNRaZy4v4YgVenGd52dRBI=
