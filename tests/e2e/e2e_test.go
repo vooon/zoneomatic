@@ -339,7 +339,9 @@ func startZoneomaticConfigured(t *testing.T, extraEnv []string, extraArgs ...str
 
 	logs := bytes.NewBuffer(nil)
 	cmd := exec.Command(zoneomaticBinary(t), args...)
-	cmd.Dir = repoRoot
+	// Not the repository: the server writes doc/openapi.json into its
+	// working directory, and that one must stay the committed spec.
+	cmd.Dir = t.TempDir()
 	cmd.Env = append(os.Environ(), extraEnv...)
 	cmd.Stdout = logs
 	cmd.Stderr = logs

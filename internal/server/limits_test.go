@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,7 @@ func TestAcceptProxy_TrustedSenderOnly(t *testing.T) {
 	}
 	srv, listener, err := NewServer(cli)
 	require.NoError(t, err)
+	srv.OpenAPI.Config.JSONFilePath = filepath.Join(t.TempDir(), "openapi.json")
 	RegisterEndpoints(srv, fakeHTPasswd{}, &fakeZoneController{})
 	go srv.Run() // nolint:errcheck
 	t.Cleanup(func() { _ = listener.Close() })
@@ -118,6 +120,7 @@ func TestAcceptProxy_TrustedSenderOnly(t *testing.T) {
 	cli.ProxyTrusted = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	srv2, listener2, err := NewServer(cli)
 	require.NoError(t, err)
+	srv2.OpenAPI.Config.JSONFilePath = filepath.Join(t.TempDir(), "openapi.json")
 	RegisterEndpoints(srv2, fakeHTPasswd{}, &fakeZoneController{})
 	go srv2.Run() // nolint:errcheck
 	t.Cleanup(func() { _ = listener2.Close() })

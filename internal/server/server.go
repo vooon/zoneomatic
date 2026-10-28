@@ -106,6 +106,9 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 				SpecURL:          "/swagger/openapi.json",
 				SwaggerURL:       "/swagger",
 				UIHandler:        fuego.DefaultOpenAPIHandler,
+				// The server entry is the configured address, not the bound
+				// one, so the written spec does not change with every run.
+				DisableDefaultServer: true,
 				Info: &openapi3.Info{
 					Title:       "Zoneomatic API",
 					Description: "HTTP API for zoneomatic DNS updates and PowerDNS-compatible zone management.",
@@ -144,6 +147,11 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 			},
 		),
 	)
+
+	srv.OpenAPI.Description().Servers = append(srv.OpenAPI.Description().Servers, &openapi3.Server{
+		URL:         "http://" + cli.Listen,
+		Description: "zoneomatic (--listen)",
+	})
 
 	return srv, listener, nil
 }
