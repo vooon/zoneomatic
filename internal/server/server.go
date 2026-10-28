@@ -72,16 +72,33 @@ func NewServer(cli *Cli) (*fuego.Server, net.Listener, error) {
 	}
 
 	if cli.AcceptProxy {
-		pl := &proxyproto.Listener{
+		// Only the configured proxies may speak PROXY protocol, and they
+		// must: a connection from anyone else is dropped, so nobody can
+		// forge a client address by sending a header of their own.
+		policy, err := proxyproto.TrustProxyHeaderFromRanges(prefixStrings(cli.ProxyTrusted))
+		if err != nil {
+			listener.Close() // nolint:errcheck
+			return nil, nil, fmt.Errorf("--proxy-trusted: %w", err)
+		}
+		listener = &proxyproto.Listener{
 			Listener:          listener,
+			ConnPolicy:        policy,
 			ReadHeaderTimeout: cli.ProxyHeaderTimeout,
 		}
-		listener = pl
+	}
+
+	middlewares := []func(http.Handler) http.Handler{otelHTTPMiddleware()}
+	if cli.MaxBodySize > 0 {
+		middlewares = append(middlewares, maxBodyMiddleware(cli.MaxBodySize))
+	}
+	if cli.RateLimit > 0 {
+		middlewares = append(middlewares, newClientLimiter(cli.RateLimit, cli.RateBurst).middleware)
 	}
 
 	srv := fuego.NewServer(
 		fuego.WithListener(listener),
-		fuego.WithGlobalMiddlewares(otelHTTPMiddleware()),
+		fuego.WithGlobalMiddlewares(middlewares...),
+		fuego.WithMaxBodySize(cli.MaxBodySize),
 		fuego.WithEngineOptions(
 			fuego.WithOpenAPIConfig(fuego.OpenAPIConfig{
 				JSONFilePath:     "doc/openapi.json",
@@ -424,6 +441,14 @@ func RegisterEndpoints(srv *fuego.Server, htp htpasswd.HTPasswd, zctl zone.Contr
 		),
 	)
 
+}
+
+func prefixStrings(prefixes []netip.Prefix) []string {
+	ret := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		ret = append(ret, p.String())
+	}
+	return ret
 }
 
 func badRequestError(detail string) *fuego.HTTPError {
