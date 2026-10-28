@@ -107,8 +107,8 @@ _pop3s._tcp        IN SRV   0 0 0 .
 ; You could mark Let's Encrypt as the only Certificate Authority allowed to
 ; sign TLS certificates for your domain.
 @                  IN CAA   0 issue "letsencrypt.org"
+                   IN A     1.2.3.4
+                   IN AAAA  2001:dead:beef::1
 ;
 ; Note: After starting up, once an ACME account has been created, CAA records
 ; that restrict issuance to the account will be suggested.
-@                  IN A     1.2.3.4
-                   IN AAAA  2001:dead:beef::1

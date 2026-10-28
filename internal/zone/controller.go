@@ -405,6 +405,9 @@ func (s *File) apply(ctx context.Context, lg *slog.Logger, ops ...masterfile.Op)
 		return false, err
 	}
 
+	for i, op := range ops {
+		ops[i] = withDefaultPlacement(z, op)
+	}
 	results, err := z.Apply(ops...)
 	if err != nil {
 		if errors.Is(err, masterfile.ErrNotFound) {
@@ -455,11 +458,30 @@ func rrs(rtype uint16, ttl uint32, contents []string) []masterfile.RR {
 	return ret
 }
 
-// acmePlacement puts a new challenge record after the records of its own
-// name, else after the last _acme-challenge record in the file, else at the
-// end.
-func acmePlacement(name string) masterfile.Placement {
-	return masterfile.Placement{{Owner: name}, {Prefix: "_acme-challenge"}}
+// withDefaultPlacement gives an operation without an explicit placement the
+// library's default: new records go after the owner's own records, else
+// after the records sharing its first label (all _acme-challenge.* together),
+// else after its siblings under the same parent, else after the last record
+// of the same type, else at the end.
+func withDefaultPlacement(z *masterfile.Zone, op masterfile.Op) masterfile.Op {
+	switch o := op.(type) {
+	case masterfile.Replace:
+		if o.Placement == nil && len(o.Types) > 0 {
+			o.Placement = z.DefaultPlacement(o.Owner, o.Types[0])
+		}
+		return o
+	case masterfile.Collapse:
+		if o.Placement == nil {
+			o.Placement = z.DefaultPlacement(o.Owner, o.Type)
+		}
+		return o
+	case masterfile.AddRemove:
+		if o.Placement == nil {
+			o.Placement = z.DefaultPlacement(o.Owner, o.Type)
+		}
+		return o
+	}
+	return op
 }
 
 func parseRRType(typ string) (uint16, error) {
@@ -625,9 +647,8 @@ func (s *File) UpdatePTRAddress(ctx context.Context, ptrName, target string, mod
 	lg := s.lg.With("ptr_name", ptrName, "ptr_target", target, "mode", string(mode))
 
 	op := masterfile.Replace{
-		Selector:  masterfile.Selector{Owner: ptrName, Types: []uint16{dns.TypePTR}},
-		Records:   rrs(dns.TypePTR, 0, []string{target}),
-		Placement: masterfile.Placement{{Owner: ptrName}},
+		Selector: masterfile.Selector{Owner: ptrName, Types: []uint16{dns.TypePTR}},
+		Records:  rrs(dns.TypePTR, 0, []string{target}),
 	}
 	switch mode {
 	case PTRUpdateAppend:
@@ -761,12 +782,11 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 	switch {
 	case newToken == "" && oldToken != "":
 		op = masterfile.Collapse{
-			Owner:     domain,
-			Type:      dns.TypeTXT,
-			Drop:      []string{oldToken},
-			Keep:      EmptyPlaceholder,
-			KeepTTL:   ttl,
-			Placement: acmePlacement(domain),
+			Owner:   domain,
+			Type:    dns.TypeTXT,
+			Drop:    []string{oldToken},
+			Keep:    EmptyPlaceholder,
+			KeepTTL: ttl,
 		}
 	default:
 		if newToken == "" {
@@ -778,9 +798,8 @@ func (s *File) UpdateACMEChallenge(ctx context.Context, domain string, newToken,
 			sel.Contents = []string{oldToken}
 		}
 		op = masterfile.Replace{
-			Selector:  sel,
-			Records:   rrs(dns.TypeTXT, ttl, []string{newToken}),
-			Placement: acmePlacement(domain),
+			Selector: sel,
+			Records:  rrs(dns.TypeTXT, ttl, []string{newToken}),
 		}
 	}
 

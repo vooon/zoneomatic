@@ -10,7 +10,7 @@ require (
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/stretchr/testify v1.12.1
-	github.com/vooon/go-masterfile v0.2.1
+	github.com/vooon/go-masterfile v0.2.2
 	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0

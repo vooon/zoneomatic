@@ -207,6 +207,11 @@ On every change zoneomatic rewrites the whole file:
 - **Comments are kept**, in every position: comment lines, at the end of a
   record, inside SOA or multi-line TXT parentheses. A replaced record keeps its
   comment; a deleted record takes its comment along.
+- **New records go where a human would put them**: after the records of the
+  same name, else after names sharing the first label (all
+  `_acme-challenge.*` together), else after the siblings under the same
+  parent, else after the last record of the same type, else at the end.
+  Changed records stay where they are.
 - The **SOA serial is bumped**. Unix-time serials become the current time
   (always increasing, even for several changes within a second), `YYYYMMDDnn`
   serials are incremented. The serial line gets a date comment.
