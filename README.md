@@ -252,7 +252,7 @@ zoneomatic is already in `dnsfmt` form (given the same version of both).
 ### Configuration
 
 ```
-Usage: zm --zone=FILE,... --htpasswd=FILE [flags]
+Usage: zoneomatic --zone=FILE,... --htpasswd=FILE [flags]
 
 Updates DNS zone files on request: DDNS, ACME dns-01 (acme-dns, LEGO, RFC2136),
 PowerDNS-compatible API.
