@@ -207,6 +207,9 @@ func (h *rfc2136Handler) handle(ctx context.Context, w dns.ResponseWriter, req *
 			if errors.Is(err, zone.ErrInvalidACMEToken) {
 				return dns.RcodeRefused, err
 			}
+			if errors.Is(err, zone.ErrInvalidRecord) {
+				return dns.RcodeFormatError, err
+			}
 			return dns.RcodeServerFailure, err
 		}
 	}

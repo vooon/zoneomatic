@@ -1,6 +1,6 @@
 module github.com/vooon/zoneomatic
 
-go 1.26.9
+go 1.27
 
 require (
 	github.com/alecthomas/kong v1.16.1
@@ -10,7 +10,7 @@ require (
 	github.com/otiai10/copy v1.14.1
 	github.com/pires/go-proxyproto v0.16.0
 	github.com/stretchr/testify v1.12.1
-	github.com/vooon/zoneomatic/pkg/dnsfmt v0.0.0-20261004171942-4093c76c24e6
+	github.com/vooon/go-masterfile v0.2.1
 	go.opentelemetry.io/contrib/bridges/otelslog v0.21.0
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
@@ -22,11 +22,6 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	golang.org/x/crypto v0.58.0
-)
-
-replace (
-	github.com/vooon/zoneomatic/pkg/dnsfmt => ./pkg/dnsfmt
-	github.com/vooon/zoneomatic/pkg/zonefile => ./pkg/zonefile
 )
 
 require (

@@ -6,8 +6,8 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
+	"github.com/vooon/go-masterfile"
 	"github.com/vooon/zoneomatic/internal/buildinfo"
-	"github.com/vooon/zoneomatic/pkg/dnsfmt"
 	"github.com/vooon/zoneomatic/pkg/fileutil"
 )
 
@@ -32,7 +32,7 @@ func main() {
 		data, err := io.ReadAll(os.Stdin)
 		kctx.FatalIfErrorf(err)
 
-		err = dnsfmt.Reformat(data, []byte(cli.Origin), os.Stdout, cli.Inc)
+		err = masterfile.Reformat(data, cli.Origin, os.Stdout, cli.Inc)
 		kctx.FatalIfErrorf(err)
 		return
 	}
@@ -43,7 +43,7 @@ func main() {
 
 		buf := bytes.NewBuffer(nil)
 
-		err = dnsfmt.Reformat(data, []byte(cli.Origin), buf, cli.Inc)
+		err = masterfile.Reformat(data, cli.Origin, buf, cli.Inc)
 		kctx.FatalIfErrorf(err)
 
 		if cli.Replace {

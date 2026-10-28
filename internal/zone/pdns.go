@@ -1,18 +1,14 @@
 package zone
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/miekg/dns"
-	"github.com/vooon/zoneomatic/pkg/dnsfmt"
-	"github.com/vooon/zoneomatic/pkg/zonefile"
+	"github.com/vooon/go-masterfile"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -124,7 +120,7 @@ func (s *DomainCtrl) DeleteRRSet(ctx context.Context, zoneName, name, typ string
 func (s *DomainCtrl) findExactZoneFile(zoneName string) *File {
 	zoneName = normalizeZoneName(zoneName)
 	for _, fl := range s.files {
-		if dnsfmt.NameEqual([]byte(normalizeZoneName(fl.origin)), []byte(zoneName)) {
+		if masterfile.NameEqual(fl.origin, zoneName) {
 			return fl
 		}
 	}
@@ -148,7 +144,7 @@ func (s *File) Snapshot(ctx context.Context) (snapshot ZoneSnapshot, err error) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	zf, soa, err := s.load()
+	z, err := s.load()
 	if err != nil {
 		return ZoneSnapshot{}, err
 	}
@@ -158,70 +154,20 @@ func (s *File) Snapshot(ctx context.Context) (snapshot ZoneSnapshot, err error) 
 		ID:   origin,
 		Name: origin,
 	}
-
-	if soa != nil {
-		soaValues := soa.ValuesStrings()
-		if len(soaValues) >= 3 {
-			serial, err := strconv.ParseUint(soaValues[2], 10, 32)
-			if err == nil {
-				zoneData.Serial = uint32(serial)
-			}
-		}
+	if serial, ok := z.Serial(); ok {
+		zoneData.Serial = serial
 	}
 
-	currentTTL := 0
-	rrsetsByKey := make(map[string]*RRSet)
-	rrsetOrder := make([]string, 0)
-
-	for _, ent := range zf.Entries() {
-		if ent.IsComment {
-			continue
+	for _, set := range z.RRSets() {
+		zoneData.RRsets = append(zoneData.RRsets, RRSet{
+			Name:    set.Owner,
+			Type:    set.Type,
+			TTL:     int(set.TTL),
+			Records: set.Contents,
+		})
+		if set.Type == "NS" && masterfile.NameEqual(set.Owner, origin) {
+			zoneData.Nameservers = append(zoneData.Nameservers, set.Contents...)
 		}
-
-		if ent.IsControl {
-			if bytes.Equal(ent.Command(), []byte("$TTL")) && len(ent.Values()) > 0 {
-				if ttl, ok := zonefile.StringToTTL(string(ent.Values()[0])); ok {
-					currentTTL = int(ttl)
-				}
-			}
-			continue
-		}
-
-		rrType := ent.RRType()
-		if rrType == 0 {
-			continue
-		}
-
-		name := absoluteRecordName(ent.Domain(), origin)
-		typeName := strings.ToUpper(string(ent.Type()))
-		ttl := currentTTL
-		if entTTL := ent.TTL(); entTTL != nil {
-			ttl = *entTTL
-		}
-
-		key := name + "\x00" + typeName
-		rrset, ok := rrsetsByKey[key]
-		if !ok {
-			rrset = &RRSet{
-				Name: name,
-				Type: typeName,
-				TTL:  ttl,
-			}
-			rrsetsByKey[key] = rrset
-			rrsetOrder = append(rrsetOrder, key)
-		}
-
-		content := entryContent(ent)
-		rrset.Records = append(rrset.Records, content)
-
-		if rrType == dns.TypeNS && name == origin {
-			zoneData.Nameservers = append(zoneData.Nameservers, content)
-		}
-	}
-
-	zoneData.RRsets = make([]RRSet, 0, len(rrsetOrder))
-	for _, key := range rrsetOrder {
-		zoneData.RRsets = append(zoneData.RRsets, *rrsetsByKey[key])
 	}
 
 	return zoneData, nil
@@ -251,33 +197,19 @@ func (s *File) ReplaceRRSet(ctx context.Context, name, typ string, ttl int, valu
 
 	lg := s.lg.With("rr_name", name, "rr_type", typ, "ttl", ttl, "record_count", len(values))
 
-	typ = strings.ToUpper(strings.TrimSpace(typ))
-	rrType, ok := dns.StringToType[typ]
-	if !ok {
-		return false, fmt.Errorf("unknown rrtype: %s", typ)
+	rrType, err := parseRRType(typ)
+	if err != nil {
+		return false, err
 	}
-
-	shortName, err := s.relativeRecordName(name)
+	ttl32, err := ttlValue(ttl)
 	if err != nil {
 		return false, err
 	}
 
-	newentbuf := bytes.NewBuffer(nil)
-	for _, val := range values {
-		_, _ = fmt.Fprintf(newentbuf, "\n%s %d IN %s %s\n", shortName, ttl, typ, formatRecordValue(rrType, val))
-	}
-
-	entries, err := parseEntries(newentbuf)
-	if err != nil {
-		return false, err
-	}
-
-	matchers := []Matcher{{
-		Domain: []byte(shortName),
-		RRType: rrType,
-	}}
-
-	return s.updateRecords(ctx, lg, matchers, entries, true, nil, true)
+	return s.apply(ctx, lg, masterfile.Replace{
+		Selector: masterfile.Selector{Owner: name, Types: []uint16{rrType}},
+		Records:  rrs(rrType, ttl32, values),
+	})
 }
 
 func (s *File) DeleteRRSet(ctx context.Context, name, typ string) (changed bool, err error) {
@@ -298,75 +230,14 @@ func (s *File) DeleteRRSet(ctx context.Context, name, typ string) (changed bool,
 
 	lg := s.lg.With("rr_name", name, "rr_type", typ)
 
-	typ = strings.ToUpper(strings.TrimSpace(typ))
-	rrType, ok := dns.StringToType[typ]
-	if !ok {
-		return false, fmt.Errorf("unknown rrtype: %s", typ)
-	}
-
-	shortName, err := s.relativeRecordName(name)
+	rrType, err := parseRRType(typ)
 	if err != nil {
 		return false, err
 	}
 
-	matchers := []Matcher{{
-		Domain: []byte(shortName),
-		RRType: rrType,
-	}}
-
-	changed, err = s.updateRecords(ctx, lg, matchers, nil, true, nil, false)
-	if errors.Is(err, ErrRecordNotFound) {
-		return false, nil
-	}
-
-	return changed, err
-}
-
-func (s *File) relativeRecordName(name string) (string, error) {
-	name = normalizeZoneName(name)
-	if !domainMatchesOrigin(name, s.origin) {
-		return "", fmt.Errorf("record name not in zone %s: %s", s.origin, name)
-	}
-
-	shortName := StripOrigin(name, s.origin)
-	if shortName == "@" {
-		return shortName, nil
-	}
-
-	return strings.TrimSuffix(strings.ToLower(normalizeZoneName(shortName)), "."), nil
+	return s.apply(ctx, lg, masterfile.Delete{Selector: masterfile.Selector{Owner: name, Types: []uint16{rrType}}})
 }
 
 func normalizeZoneName(name string) string {
 	return dns.Fqdn(strings.TrimSpace(name))
-}
-
-func absoluteRecordName(name []byte, origin string) string {
-	if len(name) == 0 || bytes.Equal(name, []byte("@")) {
-		return origin
-	}
-
-	if dns.IsFqdn(string(name)) {
-		return string(name)
-	}
-
-	return dns.Fqdn(string(name) + "." + strings.TrimSuffix(origin, "."))
-}
-
-func entryContent(ent zonefile.Entry) string {
-	values := ent.ValuesStrings()
-	switch ent.RRType() {
-	case dns.TypeTXT, dns.TypeSPF:
-		return strings.Join(values, "")
-	default:
-		return strings.Join(values, " ")
-	}
-}
-
-func formatRecordValue(rrType uint16, value string) string {
-	switch rrType {
-	case dns.TypeTXT, dns.TypeSPF:
-		return quoteTXT(value)
-	default:
-		return value
-	}
 }

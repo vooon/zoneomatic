@@ -435,7 +435,7 @@ func badRequestError(detail string) *fuego.HTTPError {
 }
 
 func zoneErrorToHTTPError(err error) error {
-	if errors.Is(err, zone.ErrInvalidACMEToken) {
+	if errors.Is(err, zone.ErrInvalidACMEToken) || errors.Is(err, zone.ErrInvalidRecord) {
 		return &fuego.HTTPError{
 			Title:  "bad request",
 			Detail: err.Error(),

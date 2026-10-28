@@ -111,5 +111,4 @@ _pop3s._tcp        IN SRV   0 0 0 .
 ; Note: After starting up, once an ACME account has been created, CAA records
 ; that restrict issuance to the account will be suggested.
 @                  IN A     1.2.3.4
-
-@                  IN AAAA  2001:dead:beef::1
+                   IN AAAA  2001:dead:beef::1

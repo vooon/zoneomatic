@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/miekg/dns"
+
+	"github.com/vooon/go-masterfile"
 )
 
 // FuzzZoneSave runs an unrelated update over arbitrary zone files. The
@@ -44,24 +47,34 @@ func FuzzZoneSave(f *testing.F) {
 
 		// Only zones that the reference parser accepts are interesting.
 		// zoneomatic reads $ORIGIN as absolute and writes it that way.
-		before, err := zoneRecords(origin, absoluteOrigins(src))
+		before, err := masterfile.Records(origin, absoluteOrigins(src))
 		if err != nil {
 			return
 		}
-		comments, err := zoneComments(src)
+		// Only the user-written parts count: the serial's generated date
+		// changes with every bump.
+		rawComments, err := masterfile.Comments(src)
 		if err != nil {
 			return
+		}
+		var comments []string
+		for _, c := range rawComments {
+			if user := strings.TrimSpace(masterfile.UserComment(c)); user != "" {
+				comments = append(comments, user)
+			}
 		}
 		// Skip inputs the two parsers read differently (e.g. miekg/dns
 		// rejects or merges fields of a multi-line SOA that starts with
 		// "(name"): that is a disagreement about the input, not a save bug.
-		zf, _, err := ctrl.(*DomainCtrl).files[0].load()
+		z, err := ctrl.(*DomainCtrl).files[0].load()
 		if err != nil {
 			return
 		}
 		plain := bytes.NewBuffer(nil)
-		PrintEntries(origin, zf.Entries(), plain)
-		if ours, err := zoneRecords(origin, plain.Bytes()); err != nil || !maps.Equal(ours, before) {
+		if err := z.WritePlain(plain); err != nil {
+			t.Fatal(err)
+		}
+		if ours, err := masterfile.Records(origin, plain.Bytes()); err != nil || !maps.Equal(ours, before) {
 			return
 		}
 
@@ -73,7 +86,7 @@ func FuzzZoneSave(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		after, err := zoneRecords(origin, out)
+		after, err := masterfile.Records(origin, out)
 		if err != nil {
 			t.Fatalf("written zone does not parse: %v\n--- input\n%s\n--- output\n%s", err, src, out)
 		}
@@ -82,7 +95,7 @@ func FuzzZoneSave(f *testing.F) {
 				t.Fatalf("record lost: %s\n--- input\n%s\n--- output\n%s", rr, src, out)
 			}
 		}
-		outComments, _ := zoneComments(out)
+		outComments, _ := masterfile.Comments(out)
 		all := ""
 		for _, c := range outComments {
 			all += c + "\n"

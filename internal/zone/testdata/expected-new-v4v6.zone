@@ -20,5 +20,4 @@ loop                IN A    127.0.0.1
 ; sub-domain challenge
 _acme-challenge.zot IN TXT  "8NwtedqEdkceTHTZILXsMU2UWEeEon24tXw0dSSDkrs"
 new-entry           IN A    1.2.3.4
-
-new-entry           IN AAAA 2001:dead:beef::1
+                    IN AAAA 2001:dead:beef::1
