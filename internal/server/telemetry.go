@@ -16,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/propagation"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -148,7 +147,7 @@ func setupTelemetry(ctx context.Context, cfg OTelConfig, includeLogSource bool) 
 			sdklog.WithProcessor(sdklog.NewBatchProcessor(exp)),
 			sdklog.WithResource(res),
 		)
-		global.SetLoggerProvider(lp)
+		otel.SetLoggerProvider(lp)
 		shutdownFns = append(shutdownFns, lp.Shutdown)
 		otelLogH := slog.Handler(otelslog.NewHandler(
 			"zoneomatic",
